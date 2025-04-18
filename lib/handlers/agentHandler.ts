@@ -287,29 +287,25 @@ export class StagehandAgentHandler {
 
             if (hasModifier) {
               // Handle key combination - press all keys simultaneously
-              try {
-                // Convert all keys first
-                const playwrightKeys = keys.map((key) => {
-                  if (key.includes("CTRL")) return "Meta";
-                  if (key.includes("CMD") || key.includes("COMMAND"))
-                    return "Meta";
-                  return this.convertKeyName(key);
-                });
+              // Convert all keys first
+              const playwrightKeys = keys.map((key) => {
+                if (key.includes("CTRL")) return "Meta";
+                if (key.includes("CMD") || key.includes("COMMAND"))
+                  return "Meta";
+                return this.convertKeyName(key);
+              });
 
-                // Press all keys down in sequence
-                for (const key of playwrightKeys) {
-                  await this.stagehandPage.page.keyboard.down(key);
-                }
+              // Press all keys down in sequence
+              for (const key of playwrightKeys) {
+                await this.stagehandPage.page.keyboard.down(key);
+              }
 
-                // Small delay to ensure the combination is registered
-                await new Promise((resolve) => setTimeout(resolve, 100));
+              // Small delay to ensure the combination is registered
+              await new Promise((resolve) => setTimeout(resolve, 100));
 
-                // Release all keys in reverse order
-                for (const key of playwrightKeys.reverse()) {
-                  await this.stagehandPage.page.keyboard.up(key);
-                }
-              } catch (error) {
-                throw error;
+              // Release all keys in reverse order
+              for (const key of playwrightKeys.reverse()) {
+                await this.stagehandPage.page.keyboard.up(key);
               }
             } else {
               // Handle individual keys as before
