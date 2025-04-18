@@ -277,33 +277,108 @@ export class StagehandAgentHandler {
         case "keypress": {
           const { keys } = action;
           if (Array.isArray(keys)) {
-            for (const key of keys) {
-              // Handle special keys
-              if (key.includes("ENTER")) {
-                await this.stagehandPage.page.keyboard.press("Enter");
-              } else if (key.includes("SPACE")) {
-                await this.stagehandPage.page.keyboard.press(" ");
-              } else if (key.includes("TAB")) {
-                await this.stagehandPage.page.keyboard.press("Tab");
-              } else if (key.includes("ESCAPE") || key.includes("ESC")) {
-                await this.stagehandPage.page.keyboard.press("Escape");
-              } else if (key.includes("BACKSPACE")) {
-                await this.stagehandPage.page.keyboard.press("Backspace");
-              } else if (key.includes("DELETE")) {
-                await this.stagehandPage.page.keyboard.press("Delete");
-              } else if (key.includes("ARROW_UP")) {
-                await this.stagehandPage.page.keyboard.press("ArrowUp");
-              } else if (key.includes("ARROW_DOWN")) {
-                await this.stagehandPage.page.keyboard.press("ArrowDown");
-              } else if (key.includes("ARROW_LEFT")) {
-                await this.stagehandPage.page.keyboard.press("ArrowLeft");
-              } else if (key.includes("ARROW_RIGHT")) {
-                await this.stagehandPage.page.keyboard.press("ArrowRight");
-              } else {
-                // For other keys, use the existing conversion
-                const playwrightKey = this.convertKeyName(key);
-                await this.stagehandPage.page.keyboard.press(playwrightKey);
+            console.log("[Keypress] Received keys:", keys);
+
+            // Check if CTRL or CMD is present in the keys
+            const hasModifier = keys.some(
+              (key) =>
+                key.includes("CTRL") ||
+                key.includes("CMD") ||
+                key.includes("COMMAND"),
+            );
+            console.log("[Keypress] Has modifier keys:", hasModifier);
+
+            if (hasModifier) {
+              // Handle key combination - press all keys simultaneously
+              try {
+                // Convert all keys first
+                const playwrightKeys = keys.map((key) => {
+                  if (key.includes("CTRL")) return "Meta";
+                  if (key.includes("CMD") || key.includes("COMMAND"))
+                    return "Meta";
+                  return this.convertKeyName(key);
+                });
+                console.log(
+                  "[Keypress] Converted to Playwright keys:",
+                  playwrightKeys,
+                );
+
+                // Press all keys down in sequence
+                console.log("[Keypress] Pressing keys down in sequence...");
+                for (const key of playwrightKeys) {
+                  console.log("[Keypress] Pressing down:", key);
+                  await this.stagehandPage.page.keyboard.down(key);
+                }
+
+                // Small delay to ensure the combination is registered
+                console.log(
+                  "[Keypress] Waiting for combination to register...",
+                );
+                await new Promise((resolve) => setTimeout(resolve, 100));
+
+                // Release all keys in reverse order
+                console.log("[Keypress] Releasing keys in reverse order...");
+                for (const key of playwrightKeys.reverse()) {
+                  console.log("[Keypress] Releasing:", key);
+                  await this.stagehandPage.page.keyboard.up(key);
+                }
+                console.log(
+                  "[Keypress] Key combination completed successfully",
+                );
+              } catch (error) {
+                console.error(
+                  "[Keypress] Error executing key combination:",
+                  error,
+                );
+                throw error;
               }
+            } else {
+              // Handle individual keys as before
+              console.log("[Keypress] Processing individual keys...");
+              for (const key of keys) {
+                console.log("[Keypress] Processing key:", key);
+                // Handle special keys
+                if (key.includes("ENTER")) {
+                  console.log("[Keypress] Pressing special key: Enter");
+                  await this.stagehandPage.page.keyboard.press("Enter");
+                } else if (key.includes("SPACE")) {
+                  console.log("[Keypress] Pressing special key: Space");
+                  await this.stagehandPage.page.keyboard.press(" ");
+                } else if (key.includes("TAB")) {
+                  console.log("[Keypress] Pressing special key: Tab");
+                  await this.stagehandPage.page.keyboard.press("Tab");
+                } else if (key.includes("ESCAPE") || key.includes("ESC")) {
+                  console.log("[Keypress] Pressing special key: Escape");
+                  await this.stagehandPage.page.keyboard.press("Escape");
+                } else if (key.includes("BACKSPACE")) {
+                  console.log("[Keypress] Pressing special key: Backspace");
+                  await this.stagehandPage.page.keyboard.press("Backspace");
+                } else if (key.includes("DELETE")) {
+                  console.log("[Keypress] Pressing special key: Delete");
+                  await this.stagehandPage.page.keyboard.press("Delete");
+                } else if (key.includes("ARROW_UP")) {
+                  console.log("[Keypress] Pressing special key: ArrowUp");
+                  await this.stagehandPage.page.keyboard.press("ArrowUp");
+                } else if (key.includes("ARROW_DOWN")) {
+                  console.log("[Keypress] Pressing special key: ArrowDown");
+                  await this.stagehandPage.page.keyboard.press("ArrowDown");
+                } else if (key.includes("ARROW_LEFT")) {
+                  console.log("[Keypress] Pressing special key: ArrowLeft");
+                  await this.stagehandPage.page.keyboard.press("ArrowLeft");
+                } else if (key.includes("ARROW_RIGHT")) {
+                  console.log("[Keypress] Pressing special key: ArrowRight");
+                  await this.stagehandPage.page.keyboard.press("ArrowRight");
+                } else {
+                  // For other keys, use the existing conversion
+                  const playwrightKey = this.convertKeyName(key);
+                  console.log(
+                    "[Keypress] Pressing converted key:",
+                    playwrightKey,
+                  );
+                  await this.stagehandPage.page.keyboard.press(playwrightKey);
+                }
+              }
+              console.log("[Keypress] Finished processing all individual keys");
             }
           }
           return { success: true };
@@ -649,12 +724,12 @@ export class StagehandAgentHandler {
       LEFT: "ArrowLeft",
       RIGHT: "ArrowRight",
       SHIFT: "Shift",
-      CONTROL: "Control",
+      CONTROL: process.platform === "darwin" ? "Meta" : "Control", // Use Meta on macOS
       ALT: "Alt",
       META: "Meta",
       COMMAND: "Meta",
       CMD: "Meta",
-      CTRL: "Control",
+      CTRL: process.platform === "darwin" ? "Meta" : "Control", // Use Meta on macOS
       DELETE: "Delete",
       HOME: "Home",
       END: "End",
