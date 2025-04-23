@@ -12,6 +12,8 @@ import {
 } from "@/types/agent";
 import { AgentClient } from "./AgentClient";
 import { AgentScreenshotProviderError } from "@/types/stagehandErrors";
+import * as fs from "fs";
+import * as path from "path";
 
 /**
  * Client for OpenAI's Computer Use Assistant API
@@ -558,25 +560,57 @@ export class OpenAICUAClient extends AgentClient {
     base64Image?: string;
     currentUrl?: string;
   }): Promise<string> {
+    let imageData = "";
+
     // Use provided options if available
     if (options?.base64Image) {
-      return `data:image/png;base64,${options.base64Image}`;
+      imageData = `data:image/png;base64,${options.base64Image}`;
     }
-
     // Use the screenshot provider if available
-    if (this.screenshotProvider) {
+    else if (this.screenshotProvider) {
       try {
         const base64Image = await this.screenshotProvider();
-        return `data:image/png;base64,${base64Image}`;
+        imageData = `data:image/png;base64,${base64Image}`;
       } catch (error) {
         console.error("Error capturing screenshot:", error);
         throw error;
       }
+    } else {
+      throw new AgentScreenshotProviderError(
+        "`screenshotProvider` has not been set. " +
+          "Please call `setScreenshotProvider()` with a valid function that returns a base64-encoded image",
+      );
     }
 
-    throw new AgentScreenshotProviderError(
-      "`screenshotProvider` has not been set. " +
-        "Please call `setScreenshotProvider()` with a valid function that returns a base64-encoded image",
-    );
+    // Save the screenshot to file if we have valid image data
+    if (imageData) {
+      try {
+        // Create screenshots directory if it doesn't exist
+        const screenshotsDir = path.resolve("screenshots");
+        if (!fs.existsSync(screenshotsDir)) {
+          fs.mkdirSync(screenshotsDir, { recursive: true });
+        }
+
+        // Generate filename with timestamp
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const filename = path.join(
+          screenshotsDir,
+          `screenshot-${timestamp}.png`,
+        );
+
+        // Extract base64 data without the data URL prefix
+        const base64Data = imageData.replace(/^data:image\/png;base64,/, "");
+
+        // Write file
+        fs.writeFileSync(filename, base64Data, "base64");
+        console.log(`Screenshot saved to ${filename}`);
+      } catch (saveError) {
+        // Log error but don't affect the function's behavior
+        console.error("Error saving screenshot to file:", saveError);
+        // Intentionally not re-throwing the error to keep function working
+      }
+    }
+
+    return imageData;
   }
 }
