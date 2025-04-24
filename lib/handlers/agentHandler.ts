@@ -807,62 +807,216 @@ export class StagehandAgentHandler {
           const element = document.elementFromPoint(x, y);
           if (!element) return null;
 
-          // Priority-based selector generation
-          // 1. data-testid or data-cy (testing attributes)
+          // 1. Testing attributes (highest priority)
           if (element.getAttribute("data-testid")) {
             return `[data-testid="${element.getAttribute("data-testid")}"]`;
           }
           if (element.getAttribute("data-cy")) {
             return `[data-cy="${element.getAttribute("data-cy")}"]`;
           }
+          if (element.getAttribute("data-test")) {
+            return `[data-test="${element.getAttribute("data-test")}"]`;
+          }
+          if (element.getAttribute("data-automation-id")) {
+            return `[data-automation-id="${element.getAttribute("data-automation-id")}"]`;
+          }
 
-          // 2. id attribute
+          // 2. ID attribute
           if (element.id) {
             return `#${element.id}`;
           }
 
-          // 3. ARIA attributes
-          const role = element.getAttribute("role");
-          const ariaLabel = element.getAttribute("aria-label");
-          if (role && ariaLabel) {
-            return `[role="${role}"][aria-label="${ariaLabel}"]`;
-          } else if (ariaLabel) {
-            return `[aria-label="${ariaLabel}"]`;
-          } else if (role) {
-            // Only use role if it seems specific enough
-            if (role !== "button" && role !== "link") {
-              return `[role="${role}"]`;
+          // 3. Extended ARIA and semantic attributes
+          const semanticAttributes = [
+            "aria-label",
+            "aria-describedby",
+            "aria-controls",
+            "aria-labelledby",
+            "aria-haspopup",
+            "aria-selected",
+            "aria-expanded",
+            "aria-checked",
+            "title",
+            "placeholder",
+            "for",
+            "alt",
+            "name", // Include name for form elements
+          ];
+
+          for (const attr of semanticAttributes) {
+            const value = element.getAttribute(attr);
+            if (value) {
+              // Special handling for name attribute on form elements
+              if (
+                attr === "name" &&
+                ["input", "select", "textarea", "button"].includes(
+                  element.tagName.toLowerCase(),
+                )
+              ) {
+                return `${element.tagName.toLowerCase()}[name="${value}"]`;
+              }
+
+              // Use attribute with tag for better specificity
+              return `${element.tagName.toLowerCase()}[${attr}="${value}"]`;
             }
           }
 
-          // 4. name attribute (common for form fields)
-          if (element.getAttribute("name")) {
-            const tagName = element.tagName.toLowerCase();
-            return `${tagName}[name="${element.getAttribute("name")}"]`;
-          }
-
-          // 5. Text content for buttons, links, etc.
-          const textContent = element.textContent?.trim();
+          // 4. Role attribute (only if specific enough)
+          const role = element.getAttribute("role");
           if (
-            textContent &&
-            ["button", "a", "h1", "h2", "h3", "h4", "h5", "h6"].includes(
-              element.tagName.toLowerCase(),
-            )
+            role &&
+            !["button", "link", "presentation", "none"].includes(role)
           ) {
-            return `//${element.tagName.toLowerCase()}[contains(text(), "${textContent}")]`;
+            return `[role="${role}"]`;
           }
 
-          // 6. Fallback: tag with class
+          // 5. Identify stable classes from UI frameworks
           if (
             element.className &&
             typeof element.className === "string" &&
             element.className.trim()
           ) {
-            const classes = element.className.trim().split(/\s+/).join(".");
-            return `${element.tagName.toLowerCase()}.${classes}`;
+            const classNames = element.className.trim().split(/\s+/);
+
+            // Filter out common dynamic class patterns
+            const isDynamicClass = (className: string): boolean => {
+              // CSS modules patterns (css-[hash])
+              if (/^css-[a-z0-9]+$/.test(className)) return true;
+
+              // Styled-components and emotion patterns
+              if (/^(sc|e)-[a-z0-9]+$/.test(className)) return true;
+
+              // Tailwind's JIT dynamic classes
+              if (/^[a-z]+:.*$/.test(className) && className.includes(":"))
+                return true;
+
+              // Angular dynamic classes
+              if (/^_ng(content|host)-[a-z0-9-]+$/.test(className)) return true;
+
+              // Vue.js dynamic classes
+              if (/^v-[a-z0-9]+$/.test(className)) return true;
+
+              // Hash-like suffixes often used in various frameworks
+              if (/^.+--[a-zA-Z0-9]+$/.test(className)) return true;
+
+              // Numeric/hash suffixes
+              if (/^.+[_-][0-9a-f]{4,}$/.test(className)) return true;
+
+              return false;
+            };
+
+            // Look for framework-specific stable class names first
+            const frameworkPatterns: Record<string, RegExp> = {
+              mui: /^Mui[A-Z][a-zA-Z]+-[a-z]+$/, // Material UI: MuiButton-root
+              ant: /^ant-[a-z]+-?[a-z]*$/, // Ant Design: ant-btn, ant-modal-content
+              chakra: /^chakra-[a-z]+-?[a-z]*$/, // Chakra UI: chakra-button
+              bootstrap:
+                /^(btn|form|nav|card|modal|container|row|col)(-[a-z]+)*$/, // Bootstrap
+              "react-bootstrap": /^(rb-|react-bootstrap-)/, // React Bootstrap
+              "tailwind-component": /^(tw-|tailwind-)/, // Tailwind CSS with prefixes
+            };
+
+            // Check for framework-specific classes
+            for (const [, pattern] of Object.entries(frameworkPatterns)) {
+              const frameworkClasses = classNames.filter((className) =>
+                pattern.test(className),
+              );
+              if (frameworkClasses.length > 0) {
+                // Use attribute selector with partial match for framework classes
+                return `${element.tagName.toLowerCase()}[class*="${frameworkClasses[0]}"]`;
+              }
+            }
+
+            // Filter out dynamic classes and keep stable ones
+            const stableClasses = classNames.filter(
+              (className) => !isDynamicClass(className),
+            );
+
+            if (stableClasses.length > 0) {
+              return `${element.tagName.toLowerCase()}.${stableClasses.join(".")}`;
+            }
           }
 
-          // 7. Last resort: tag name with position
+          // 6. Text content for buttons, links, and headings
+          const textContent = element.textContent?.trim();
+          const interactiveElements = [
+            "button",
+            "a",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+          ];
+
+          if (
+            textContent &&
+            textContent.length < 50 &&
+            interactiveElements.includes(element.tagName.toLowerCase())
+          ) {
+            // Use exact text for short content, contains() for longer text
+            if (textContent.length < 20) {
+              return `//${element.tagName.toLowerCase()}[text()="${textContent}"]`;
+            } else {
+              // Use contains for longer text to avoid issues with whitespace
+              return `//${element.tagName.toLowerCase()}[contains(text(), "${textContent.substring(0, 20)}")]`;
+            }
+          }
+
+          // 7. Structural selector (position-based)
+          try {
+            let structuralSelector = "";
+            let currentElement: Element | null = element;
+            let depth = 0;
+            const maxDepth = 3; // Limit depth to avoid overly complex selectors
+
+            while (currentElement && depth < maxDepth) {
+              // Try to get a good identifier for this element
+              let elementSelector = "";
+
+              // Check if element has an ID
+              if (currentElement.id) {
+                elementSelector = `#${currentElement.id}`;
+                structuralSelector =
+                  elementSelector +
+                  (structuralSelector ? " > " + structuralSelector : "");
+                break; // Stop here if we found an ID
+              }
+
+              // Get tag name
+              const tagName = currentElement.tagName.toLowerCase();
+              elementSelector = tagName;
+
+              // Get position among siblings of same type
+              const siblings = Array.from(
+                currentElement.parentElement?.children || [],
+              ).filter((node) => node.tagName === currentElement?.tagName);
+
+              if (siblings.length > 1) {
+                const index = siblings.indexOf(currentElement) + 1;
+                elementSelector += `:nth-of-type(${index})`;
+              }
+
+              // Build selector from right to left (child to parent)
+              structuralSelector =
+                elementSelector +
+                (structuralSelector ? " > " + structuralSelector : "");
+
+              // Move up to parent
+              currentElement = currentElement.parentElement;
+              depth++;
+            }
+
+            if (structuralSelector) {
+              return structuralSelector;
+            }
+          } catch (e) {
+            // Ignore errors in structural selector generation
+            console.error("Error generating structural selector:", e);
+          }
+
+          // 8. Last resort: tag name
           return `${element.tagName.toLowerCase()}`;
         },
         { x, y },
@@ -886,39 +1040,162 @@ export class StagehandAgentHandler {
         const element = document.activeElement;
         if (!element || element === document.body) return "body";
 
-        // Use same priority-based strategy as generateSelector
+        // 1. Testing attributes (highest priority)
         if (element.getAttribute("data-testid")) {
           return `[data-testid="${element.getAttribute("data-testid")}"]`;
         }
         if (element.getAttribute("data-cy")) {
           return `[data-cy="${element.getAttribute("data-cy")}"]`;
         }
+        if (element.getAttribute("data-test")) {
+          return `[data-test="${element.getAttribute("data-test")}"]`;
+        }
+        if (element.getAttribute("data-automation-id")) {
+          return `[data-automation-id="${element.getAttribute("data-automation-id")}"]`;
+        }
+
+        // 2. ID attribute
         if (element.id) {
           return `#${element.id}`;
         }
 
+        // 3. Extended ARIA and semantic attributes
+        const semanticAttributes = [
+          "aria-label",
+          "aria-describedby",
+          "aria-controls",
+          "aria-labelledby",
+          "aria-haspopup",
+          "aria-selected",
+          "aria-expanded",
+          "aria-checked",
+          "title",
+          "placeholder",
+          "for",
+          "alt",
+          "name", // Include name for form elements
+        ];
+
+        for (const attr of semanticAttributes) {
+          const value = element.getAttribute(attr);
+          if (value) {
+            // Special handling for name attribute on form elements
+            if (
+              attr === "name" &&
+              ["input", "select", "textarea", "button"].includes(
+                element.tagName.toLowerCase(),
+              )
+            ) {
+              return `${element.tagName.toLowerCase()}[name="${value}"]`;
+            }
+
+            // Use attribute with tag for better specificity
+            return `${element.tagName.toLowerCase()}[${attr}="${value}"]`;
+          }
+        }
+
+        // 4. Role attribute (only if specific enough)
         const role = element.getAttribute("role");
-        const ariaLabel = element.getAttribute("aria-label");
-        if (role && ariaLabel) {
-          return `[role="${role}"][aria-label="${ariaLabel}"]`;
-        } else if (ariaLabel) {
-          return `[aria-label="${ariaLabel}"]`;
+        if (
+          role &&
+          !["button", "link", "presentation", "none"].includes(role)
+        ) {
+          return `[role="${role}"]`;
         }
 
-        if (element.getAttribute("name")) {
-          const tagName = element.tagName.toLowerCase();
-          return `${tagName}[name="${element.getAttribute("name")}"]`;
-        }
-
+        // 5. Identify stable classes from UI frameworks
         if (
           element.className &&
           typeof element.className === "string" &&
           element.className.trim()
         ) {
-          const classes = element.className.trim().split(/\s+/).join(".");
-          return `${element.tagName.toLowerCase()}.${classes}`;
+          const classNames = element.className.trim().split(/\s+/);
+
+          // Filter out common dynamic class patterns
+          const isDynamicClass = (className: string): boolean => {
+            // CSS modules patterns (css-[hash])
+            if (/^css-[a-z0-9]+$/.test(className)) return true;
+
+            // Styled-components and emotion patterns
+            if (/^(sc|e)-[a-z0-9]+$/.test(className)) return true;
+
+            // Tailwind's JIT dynamic classes
+            if (/^[a-z]+:.*$/.test(className) && className.includes(":"))
+              return true;
+
+            // Angular dynamic classes
+            if (/^_ng(content|host)-[a-z0-9-]+$/.test(className)) return true;
+
+            // Vue.js dynamic classes
+            if (/^v-[a-z0-9]+$/.test(className)) return true;
+
+            // Hash-like suffixes often used in various frameworks
+            if (/^.+--[a-zA-Z0-9]+$/.test(className)) return true;
+
+            // Numeric/hash suffixes
+            if (/^.+[_-][0-9a-f]{4,}$/.test(className)) return true;
+
+            return false;
+          };
+
+          // Look for framework-specific stable class names first
+          const frameworkPatterns: Record<string, RegExp> = {
+            mui: /^Mui[A-Z][a-zA-Z]+-[a-z]+$/, // Material UI: MuiButton-root
+            ant: /^ant-[a-z]+-?[a-z]*$/, // Ant Design: ant-btn, ant-modal-content
+            chakra: /^chakra-[a-z]+-?[a-z]*$/, // Chakra UI: chakra-button
+            bootstrap:
+              /^(btn|form|nav|card|modal|container|row|col)(-[a-z]+)*$/, // Bootstrap
+            "react-bootstrap": /^(rb-|react-bootstrap-)/, // React Bootstrap
+            "tailwind-component": /^(tw-|tailwind-)/, // Tailwind CSS with prefixes
+          };
+
+          // Check for framework-specific classes
+          for (const [, pattern] of Object.entries(frameworkPatterns)) {
+            const frameworkClasses = classNames.filter((className) =>
+              pattern.test(className),
+            );
+            if (frameworkClasses.length > 0) {
+              // Use attribute selector with partial match for framework classes
+              return `${element.tagName.toLowerCase()}[class*="${frameworkClasses[0]}"]`;
+            }
+          }
+
+          // Filter out dynamic classes and keep stable ones
+          const stableClasses = classNames.filter(
+            (className) => !isDynamicClass(className),
+          );
+
+          if (stableClasses.length > 0) {
+            return `${element.tagName.toLowerCase()}.${stableClasses.join(".")}`;
+          }
         }
 
+        // 6. Text content for interactive elements (less useful for inputs but good for buttons)
+        const textContent = element.textContent?.trim();
+        const interactiveElements = [
+          "button",
+          "a",
+          "h1",
+          "h2",
+          "h3",
+          "h4",
+          "h5",
+          "h6",
+        ];
+
+        if (
+          textContent &&
+          textContent.length < 50 &&
+          interactiveElements.includes(element.tagName.toLowerCase())
+        ) {
+          if (textContent.length < 20) {
+            return `//${element.tagName.toLowerCase()}[text()="${textContent}"]`;
+          } else {
+            return `//${element.tagName.toLowerCase()}[contains(text(), "${textContent.substring(0, 20)}")]`;
+          }
+        }
+
+        // 7. Last resort: tag name
         return `${element.tagName.toLowerCase()}`;
       });
     } catch (error) {
