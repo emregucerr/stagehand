@@ -14,6 +14,16 @@ import {
 import * as fs from "fs";
 import * as path from "path";
 
+// Create a type declaration for the extended Window interface
+declare global {
+  interface Window {
+    __stagehandCursorX?: number;
+    __stagehandCursorY?: number;
+    __updateCursorPosition?: (x: number, y: number) => void;
+    __animateClick?: (x: number, y: number) => void;
+  }
+}
+
 // Define an interface for recorded actions
 interface RecordedAction {
   action: string;
@@ -404,15 +414,94 @@ export class StagehandAgentHandler {
         }
 
         case "scroll": {
-          const { x, y, scroll_x = 0, scroll_y = 0 } = action;
-          // First move to the position
-          await this.stagehandPage.page.mouse.move(x as number, y as number);
-          // Then scroll
-          await this.stagehandPage.page.evaluate(
-            ({ scrollX, scrollY }) => window.scrollBy(scrollX, scrollY),
-            { scrollX: scroll_x as number, scrollY: scroll_y as number },
-          );
-          result = { success: true };
+          const { scroll_x = 0, scroll_y = 0 } = action;
+
+          try {
+            // Get the current cursor position
+            const cursorPosition = await this.stagehandPage.page.evaluate(
+              () => {
+                return {
+                  x: window.__stagehandCursorX || 0,
+                  y: window.__stagehandCursorY || 0,
+                };
+              },
+            );
+
+            // Scroll the element at the cursor position if it's scrollable, otherwise scroll the window
+            await this.stagehandPage.page.evaluate(
+              ({ scrollX, scrollY, cursorX, cursorY }) => {
+                // Find the element at the cursor position
+                const element = document.elementFromPoint(cursorX, cursorY);
+
+                if (element) {
+                  // Check if this element or any of its parents is scrollable
+                  let scrollableElement: Element | null = null;
+                  let currentElement: Element | null = element;
+
+                  // Function to check if an element is scrollable
+                  const isScrollable = (el: Element): boolean => {
+                    const style = window.getComputedStyle(el);
+                    const overflowX = style.getPropertyValue("overflow-x");
+                    const overflowY = style.getPropertyValue("overflow-y");
+
+                    // Check if element has scrollable content
+                    const hasScrollableContent =
+                      el.scrollHeight > el.clientHeight ||
+                      el.scrollWidth > el.clientWidth;
+
+                    // Check if element has scrollable overflow style
+                    const hasScrollableStyle =
+                      ["auto", "scroll"].includes(overflowY) ||
+                      ["auto", "scroll"].includes(overflowX);
+
+                    return hasScrollableStyle && hasScrollableContent;
+                  };
+
+                  // Walk up the DOM tree looking for scrollable elements
+                  while (currentElement && currentElement !== document.body) {
+                    if (isScrollable(currentElement)) {
+                      scrollableElement = currentElement;
+                      break;
+                    }
+                    if (currentElement.parentElement) {
+                      currentElement = currentElement.parentElement;
+                    } else {
+                      break;
+                    }
+                  }
+
+                  // If found a scrollable element, scroll it
+                  if (scrollableElement) {
+                    scrollableElement.scrollBy(scrollX, scrollY);
+                    return; // Exit early
+                  }
+                }
+
+                // Fall back to window scrolling if no scrollable element was found
+                window.scrollBy(scrollX, scrollY);
+              },
+              {
+                scrollX: scroll_x as number,
+                scrollY: scroll_y as number,
+                cursorX: cursorPosition.x,
+                cursorY: cursorPosition.y,
+              },
+            );
+
+            result = { success: true };
+          } catch (error) {
+            const errorMessage =
+              error instanceof Error ? error.message : String(error);
+            this.logger({
+              category: "agent",
+              message: `Error executing scroll action: ${errorMessage}`,
+              level: 0,
+            });
+            result = {
+              success: false,
+              error: errorMessage,
+            };
+          }
           break;
         }
 
@@ -658,10 +747,18 @@ export class StagehandAgentHandler {
           document.body.appendChild(cursor);
           document.body.appendChild(highlight);
           
+          // Initialize cursor position variables
+          window.__stagehandCursorX = 0;
+          window.__stagehandCursorY = 0;
+          
           // Add a function to update cursor position
           window.__updateCursorPosition = function(x, y) {
             if (cursor) {
               cursor.style.transform = \`translate(\${x - 4}px, \${y - 4}px)\`;
+              
+              // Store the cursor position for later use by other functions
+              window.__stagehandCursorX = x;
+              window.__stagehandCursorY = y;
             }
           };
           
@@ -1279,12 +1376,40 @@ export class StagehandAgentHandler {
 
         case "scroll": {
           const { scroll_x = 0, scroll_y = 0 } = action;
+
+          // Get the current cursor position
+          const cursorPosition = await this.stagehandPage.page.evaluate(() => {
+            return {
+              x: window.__stagehandCursorX || 0,
+              y: window.__stagehandCursorY || 0,
+            };
+          });
+
+          // Get the selector for the element at the cursor position
+          let selector = null;
+          try {
+            selector = await this.generateSelector(
+              cursorPosition.x,
+              cursorPosition.y,
+            );
+          } catch (error) {
+            // If selector generation fails, continue without it
+            this.logger({
+              category: "agent",
+              message: `Warning: Failed to generate selector for scroll action: ${error}`,
+              level: 1,
+            });
+          }
+
           recordedAction = {
             ...recordedAction,
-            action: "scrollWindow",
+            action: "scrollElement",
+            selector, // Element under the cursor (might be the scrolled element or a child)
             details: {
               deltaX: scroll_x as number,
               deltaY: scroll_y as number,
+              x: cursorPosition.x,
+              y: cursorPosition.y,
             },
           };
           break;
