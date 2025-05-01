@@ -13,6 +13,7 @@ import {
 } from "@/types/agent";
 import * as fs from "fs";
 import * as path from "path";
+import CssSelectorGenerator from "css-selector-generator";
 
 // Create a type declaration for the extended Window interface
 declare global {
@@ -904,217 +905,200 @@ export class StagehandAgentHandler {
           const element = document.elementFromPoint(x, y);
           if (!element) return null;
 
-          // 1. Testing attributes (highest priority)
-          if (element.getAttribute("data-testid")) {
-            return `[data-testid="${element.getAttribute("data-testid")}"]`;
-          }
-          if (element.getAttribute("data-cy")) {
-            return `[data-cy="${element.getAttribute("data-cy")}"]`;
-          }
-          if (element.getAttribute("data-test")) {
-            return `[data-test="${element.getAttribute("data-test")}"]`;
-          }
-          if (element.getAttribute("data-automation-id")) {
-            return `[data-automation-id="${element.getAttribute("data-automation-id")}"]`;
-          }
+          // Function to check if selector uniquely identifies an element
+          const isSelectorUnique = (selector: string): boolean => {
+            try {
+              const matchingElements = document.querySelectorAll(selector);
+              return (
+                matchingElements.length === 1 && matchingElements[0] === element
+              );
+            } catch {
+              return false; // Invalid selector
+            }
+          };
 
-          // 2. ID attribute
+          // 1. Try ID selector - most reliable
           if (element.id) {
-            return `#${element.id}`;
+            const selector = `#${element.id}`;
+            if (isSelectorUnique(selector)) {
+              return selector;
+            }
           }
 
-          // 3. Extended ARIA and semantic attributes
+          // 2. Try data attributes - next most reliable
+          const dataAttributes = [
+            "data-testid",
+            "data-cy",
+            "data-test",
+            "data-automation-id",
+          ];
+          for (const attr of dataAttributes) {
+            const value = element.getAttribute(attr);
+            if (value) {
+              const selector = `[${attr}="${value}"]`;
+              if (isSelectorUnique(selector)) {
+                return selector;
+              }
+            }
+          }
+
+          // 3. Try tag with semantic attributes
           const semanticAttributes = [
             "aria-label",
-            "aria-describedby",
-            "aria-controls",
-            "aria-labelledby",
-            "aria-haspopup",
-            "aria-selected",
-            "aria-expanded",
-            "aria-checked",
-            "title",
+            "name",
             "placeholder",
+            "role",
+            "title",
             "for",
             "alt",
-            "name", // Include name for form elements
           ];
-
           for (const attr of semanticAttributes) {
             const value = element.getAttribute(attr);
             if (value) {
-              // Special handling for name attribute on form elements
-              if (
-                attr === "name" &&
-                ["input", "select", "textarea", "button"].includes(
-                  element.tagName.toLowerCase(),
-                )
-              ) {
-                return `${element.tagName.toLowerCase()}[name="${value}"]`;
-              }
-
-              // Use attribute with tag for better specificity
-              return `${element.tagName.toLowerCase()}[${attr}="${value}"]`;
-            }
-          }
-
-          // 4. Role attribute (only if specific enough)
-          const role = element.getAttribute("role");
-          if (
-            role &&
-            !["button", "link", "presentation", "none"].includes(role)
-          ) {
-            return `[role="${role}"]`;
-          }
-
-          // 5. Identify stable classes from UI frameworks
-          if (
-            element.className &&
-            typeof element.className === "string" &&
-            element.className.trim()
-          ) {
-            const classNames = element.className.trim().split(/\s+/);
-
-            // Filter out common dynamic class patterns
-            const isDynamicClass = (className: string): boolean => {
-              // CSS modules patterns (css-[hash])
-              if (/^css-[a-z0-9]+$/.test(className)) return true;
-
-              // Styled-components and emotion patterns
-              if (/^(sc|e)-[a-z0-9]+$/.test(className)) return true;
-
-              // Tailwind's JIT dynamic classes
-              if (/^[a-z]+:.*$/.test(className) && className.includes(":"))
-                return true;
-
-              // Angular dynamic classes
-              if (/^_ng(content|host)-[a-z0-9-]+$/.test(className)) return true;
-
-              // Vue.js dynamic classes
-              if (/^v-[a-z0-9]+$/.test(className)) return true;
-
-              // Hash-like suffixes often used in various frameworks
-              if (/^.+--[a-zA-Z0-9]+$/.test(className)) return true;
-
-              // Numeric/hash suffixes
-              if (/^.+[_-][0-9a-f]{4,}$/.test(className)) return true;
-
-              return false;
-            };
-
-            // Look for framework-specific stable class names first
-            const frameworkPatterns: Record<string, RegExp> = {
-              mui: /^Mui[A-Z][a-zA-Z]+-[a-z]+$/, // Material UI: MuiButton-root
-              ant: /^ant-[a-z]+-?[a-z]*$/, // Ant Design: ant-btn, ant-modal-content
-              chakra: /^chakra-[a-z]+-?[a-z]*$/, // Chakra UI: chakra-button
-              bootstrap:
-                /^(btn|form|nav|card|modal|container|row|col)(-[a-z]+)*$/, // Bootstrap
-              "react-bootstrap": /^(rb-|react-bootstrap-)/, // React Bootstrap
-              "tailwind-component": /^(tw-|tailwind-)/, // Tailwind CSS with prefixes
-            };
-
-            // Check for framework-specific classes
-            for (const [, pattern] of Object.entries(frameworkPatterns)) {
-              const frameworkClasses = classNames.filter((className) =>
-                pattern.test(className),
-              );
-              if (frameworkClasses.length > 0) {
-                // Use attribute selector with partial match for framework classes
-                return `${element.tagName.toLowerCase()}[class*="${frameworkClasses[0]}"]`;
+              const selector = `${element.tagName.toLowerCase()}[${attr}="${value}"]`;
+              if (isSelectorUnique(selector)) {
+                return selector;
               }
             }
-
-            // Filter out dynamic classes and keep stable ones
-            const stableClasses = classNames.filter(
-              (className) => !isDynamicClass(className),
-            );
-
-            if (stableClasses.length > 0) {
-              return `${element.tagName.toLowerCase()}.${stableClasses.join(".")}`;
-            }
           }
 
-          // 6. Text content for buttons, links, and headings
-          const textContent = element.textContent?.trim();
-          const interactiveElements = [
-            "button",
-            "a",
-            "h1",
-            "h2",
-            "h3",
-            "h4",
-            "h5",
-            "h6",
-          ];
-
-          if (
-            textContent &&
-            textContent.length < 50 &&
-            interactiveElements.includes(element.tagName.toLowerCase())
-          ) {
-            // Use exact text for short content, contains() for longer text
-            if (textContent.length < 20) {
-              return `//${element.tagName.toLowerCase()}[text()="${textContent}"]`;
-            } else {
-              // Use contains for longer text to avoid issues with whitespace
-              return `//${element.tagName.toLowerCase()}[contains(text(), "${textContent.substring(0, 20)}")]`;
-            }
-          }
-
-          // 7. Structural selector (position-based)
+          // 4. Now try the CSS selector generator library for more complex cases
           try {
-            let structuralSelector = "";
-            let currentElement: Element | null = element;
-            let depth = 0;
-            const maxDepth = 3; // Limit depth to avoid overly complex selectors
-
-            while (currentElement && depth < maxDepth) {
-              // Try to get a good identifier for this element
-              let elementSelector = "";
-
-              // Check if element has an ID
-              if (currentElement.id) {
-                elementSelector = `#${currentElement.id}`;
-                structuralSelector =
-                  elementSelector +
-                  (structuralSelector ? " > " + structuralSelector : "");
-                break; // Stop here if we found an ID
+            // Create a temporary generator in the page context
+            // Note: This is a workaround since we can't pass the CssSelectorGenerator directly
+            // We have to recreate it in the browser context
+            const generatorScript = document.createElement("script");
+            generatorScript.textContent = `
+              window.__generateSelector = function(element) {
+                if (!window.CssSelectorGenerator) {
+                  // Define a simplified version if the library isn't loaded
+                  class SimpleSelectorGenerator {
+                    getSelector(el) {
+                      // Skip the simple cases we already tried above
+                      
+                      // Try unique classes
+                      const classes = Array.from(el.classList).filter(c => 
+                        !['dark', 'light', 'theme-dark', 'theme-light', 'night-mode', 'day-mode'].includes(c) &&
+                        !/^(css-|sc-|e-)/.test(c)
+                      );
+                      
+                      if (classes.length > 0) {
+                        const selector = el.tagName.toLowerCase() + '.' + classes.join('.');
+                        if (document.querySelectorAll(selector).length === 1) {
+                          return selector;
+                        }
+                        
+                        // Try individual classes
+                        for (const cls of classes) {
+                          const singleClassSelector = el.tagName.toLowerCase() + '.' + cls;
+                          if (document.querySelectorAll(singleClassSelector).length === 1) {
+                            return singleClassSelector;
+                          }
+                        }
+                      }
+                      
+                      // Try unique path
+                      let current = el;
+                      let path = '';
+                      let iterations = 0;
+                      
+                      while (current && iterations < 4) {
+                        let part = current.tagName.toLowerCase();
+                        
+                        if (current.id) {
+                          part = '#' + current.id;
+                          path = part + (path ? ' > ' + path : '');
+                          break;
+                        }
+                        
+                        // Add position if needed
+                        if (current.parentElement) {
+                          const siblings = Array.from(current.parentElement.children).filter(
+                            node => node.tagName === current.tagName
+                          );
+                          
+                          if (siblings.length > 1) {
+                            const index = siblings.indexOf(current) + 1;
+                            part += ':nth-of-type(' + index + ')';
+                          }
+                        }
+                        
+                        path = part + (path ? ' > ' + path : '');
+                        current = current.parentElement;
+                        iterations++;
+                      }
+                      
+                      return path;
+                    }
+                  }
+                  window.CssSelectorGenerator = SimpleSelectorGenerator;
+                }
+                
+                const generator = new window.CssSelectorGenerator();
+                return generator.getSelector(element);
               }
+            `;
+            document.head.appendChild(generatorScript);
 
-              // Get tag name
-              const tagName = currentElement.tagName.toLowerCase();
-              elementSelector = tagName;
+            // Use the global function
+            // @ts-ignore - This function is defined in the script above
+            const selector = window.__generateSelector(element);
 
-              // Get position among siblings of same type
-              const siblings = Array.from(
-                currentElement.parentElement?.children || [],
-              ).filter((node) => node.tagName === currentElement?.tagName);
+            // Clean up
+            document.head.removeChild(generatorScript);
 
-              if (siblings.length > 1) {
-                const index = siblings.indexOf(currentElement) + 1;
-                elementSelector += `:nth-of-type(${index})`;
+            if (selector) {
+              // Test if the selector is unique
+              if (isSelectorUnique(selector)) {
+                return selector;
               }
-
-              // Build selector from right to left (child to parent)
-              structuralSelector =
-                elementSelector +
-                (structuralSelector ? " > " + structuralSelector : "");
-
-              // Move up to parent
-              currentElement = currentElement.parentElement;
-              depth++;
-            }
-
-            if (structuralSelector) {
-              return structuralSelector;
             }
           } catch (e) {
-            // Ignore errors in structural selector generation
-            console.error("Error generating structural selector:", e);
+            console.error("CSS Selector Generator error:", e);
           }
 
-          // 8. Last resort: tag name
-          return `${element.tagName.toLowerCase()}`;
+          // 5. If we reached here, try path-based selector as fallback
+          let current = element;
+          let path = "";
+          let depth = 0;
+          const maxDepth = 3;
+
+          while (current && depth < maxDepth) {
+            let part = current.tagName.toLowerCase();
+
+            if (current.id) {
+              part = `#${current.id}`;
+              path = part + (path ? " > " + path : "");
+              break;
+            }
+
+            // Add position if there are multiple siblings
+            if (current.parentElement) {
+              const siblings = Array.from(
+                current.parentElement.children,
+              ).filter((node) => node.tagName === current.tagName);
+
+              if (siblings.length > 1) {
+                const index = siblings.indexOf(current) + 1;
+                part += `:nth-of-type(${index})`;
+              }
+            }
+
+            path = part + (path ? " > " + path : "");
+            current = current.parentElement;
+            depth++;
+          }
+
+          if (path && isSelectorUnique(path)) {
+            return path;
+          }
+
+          // 6. Last resort - tag name with position
+          return `${element.tagName.toLowerCase()}:nth-of-type(${
+            Array.from(element.parentElement?.children || [])
+              .filter((node) => node.tagName === element.tagName)
+              .indexOf(element) + 1
+          })`;
         },
         { x, y },
       );
@@ -1252,7 +1236,7 @@ export class StagehandAgentHandler {
               pattern.test(className),
             );
             if (frameworkClasses.length > 0) {
-              // Use attribute selector with partial match for framework classes
+              // Use attribute selector with tag and framework class for better specificity
               return `${element.tagName.toLowerCase()}[class*="${frameworkClasses[0]}"]`;
             }
           }
