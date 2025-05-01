@@ -13,7 +13,7 @@ import {
 } from "@/types/agent";
 import * as fs from "fs";
 import * as path from "path";
-import CssSelectorGenerator from "css-selector-generator";
+// The css-selector-generator library is loaded dynamically in the browser context
 
 // Create a type declaration for the extended Window interface
 declare global {
@@ -1041,7 +1041,7 @@ export class StagehandAgentHandler {
             document.head.appendChild(generatorScript);
 
             // Use the global function
-            // @ts-ignore - This function is defined in the script above
+            // @ts-expect-error - This function is defined dynamically in the script above
             const selector = window.__generateSelector(element);
 
             // Clean up
