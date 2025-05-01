@@ -254,11 +254,37 @@ export class StagehandAgentHandler {
     action: AgentAction,
   ): Promise<ActionExecutionResult> {
     let result: ActionExecutionResult = { success: false };
+    let targetElement: string | null = null;
 
     try {
       switch (action.type) {
         case "click": {
           const { x, y, button = "left" } = action;
+
+          // Get the element at this position BEFORE clicking
+          // This ensures we capture the exact element that will be clicked
+          targetElement = await this.stagehandPage.page.evaluate(
+            (coords) => {
+              const elem = document.elementFromPoint(coords.x, coords.y);
+              if (!elem) return null;
+
+              // Capture key attributes for selector generation
+              const id = elem.id ? `#${elem.id}` : null;
+              const tagName = elem.tagName.toLowerCase();
+              const textContent = elem.textContent?.trim();
+              const className = elem.className?.toString().trim();
+
+              return JSON.stringify({
+                id,
+                tagName,
+                textContent,
+                className,
+                outerHTML: elem.outerHTML.substring(0, 500), // Limit length
+              });
+            },
+            { x: Number(x), y: Number(y) },
+          );
+
           // Update cursor position first
           await this.updateCursorPosition(x as number, y as number);
           // Animate the click
@@ -297,6 +323,30 @@ export class StagehandAgentHandler {
 
         case "double_click": {
           const { x, y } = action;
+
+          // Get the element at this position BEFORE clicking
+          targetElement = await this.stagehandPage.page.evaluate(
+            (coords) => {
+              const elem = document.elementFromPoint(coords.x, coords.y);
+              if (!elem) return null;
+
+              // Capture key attributes for selector generation
+              const id = elem.id ? `#${elem.id}` : null;
+              const tagName = elem.tagName.toLowerCase();
+              const textContent = elem.textContent?.trim();
+              const className = elem.className?.toString().trim();
+
+              return JSON.stringify({
+                id,
+                tagName,
+                textContent,
+                className,
+                outerHTML: elem.outerHTML.substring(0, 500), // Limit length
+              });
+            },
+            { x: Number(x), y: Number(y) },
+          );
+
           // Update cursor position first
           await this.updateCursorPosition(x as number, y as number);
           // Animate the click
@@ -319,6 +369,30 @@ export class StagehandAgentHandler {
         // Handle the case for "doubleClick" as well for backward compatibility
         case "doubleClick": {
           const { x, y } = action;
+
+          // Get the element at this position BEFORE clicking
+          targetElement = await this.stagehandPage.page.evaluate(
+            (coords) => {
+              const elem = document.elementFromPoint(coords.x, coords.y);
+              if (!elem) return null;
+
+              // Capture key attributes for selector generation
+              const id = elem.id ? `#${elem.id}` : null;
+              const tagName = elem.tagName.toLowerCase();
+              const textContent = elem.textContent?.trim();
+              const className = elem.className?.toString().trim();
+
+              return JSON.stringify({
+                id,
+                tagName,
+                textContent,
+                className,
+                outerHTML: elem.outerHTML.substring(0, 500), // Limit length
+              });
+            },
+            { x: Number(x), y: Number(y) },
+          );
+
           // Update cursor position first
           await this.updateCursorPosition(x as number, y as number);
           // Animate the click
@@ -625,7 +699,7 @@ export class StagehandAgentHandler {
     }
 
     // Record the action and its result
-    await this.recordAction(action, result);
+    await this.recordAction(action, result, targetElement);
 
     return result;
   }
@@ -899,206 +973,205 @@ export class StagehandAgentHandler {
   private async generateSelector(x: number, y: number): Promise<string | null> {
     try {
       return await this.stagehandPage.page.evaluate(
-        (coords) => {
-          const { x, y } = coords;
+        ({ x, y }) => {
           // Get the element at the coordinates
           const element = document.elementFromPoint(x, y);
+
+          // If no element is found, return null
           if (!element) return null;
 
-          // Function to check if selector uniquely identifies an element
+          // Helper to check if a selector uniquely identifies the element
           const isSelectorUnique = (selector: string): boolean => {
             try {
-              const matchingElements = document.querySelectorAll(selector);
-              return (
-                matchingElements.length === 1 && matchingElements[0] === element
-              );
+              const elements = document.querySelectorAll(selector);
+              return elements.length === 1 && elements[0] === element;
             } catch {
-              return false; // Invalid selector
+              return false;
             }
           };
 
-          // 1. Try ID selector - most reliable
+          // Try ID selector (highest priority)
           if (element.id) {
-            const selector = `#${element.id}`;
-            if (isSelectorUnique(selector)) {
-              return selector;
+            const idSelector = `#${CSS.escape(element.id)}`;
+            if (isSelectorUnique(idSelector)) {
+              return idSelector;
             }
           }
 
-          // 2. Try data attributes - next most reliable
-          const dataAttributes = [
+          // Try data-* attributes frequently used for testing
+          const testAttributes = [
             "data-testid",
-            "data-cy",
             "data-test",
+            "data-cy",
             "data-automation-id",
+            "data-qa",
+            "data-test-id",
           ];
-          for (const attr of dataAttributes) {
+
+          for (const attr of testAttributes) {
             const value = element.getAttribute(attr);
             if (value) {
-              const selector = `[${attr}="${value}"]`;
-              if (isSelectorUnique(selector)) {
-                return selector;
+              const dataSelector = `[${attr}="${CSS.escape(value)}"]`;
+              if (isSelectorUnique(dataSelector)) {
+                return dataSelector;
               }
             }
           }
 
-          // 3. Try tag with semantic attributes
-          const semanticAttributes = [
+          // Try accessibility attributes
+          const ariaAttributes = [
             "aria-label",
-            "name",
-            "placeholder",
+            "aria-labelledby",
+            "aria-describedby",
+            "aria-controls",
             "role",
-            "title",
-            "for",
-            "alt",
           ];
-          for (const attr of semanticAttributes) {
+
+          for (const attr of ariaAttributes) {
             const value = element.getAttribute(attr);
             if (value) {
-              const selector = `${element.tagName.toLowerCase()}[${attr}="${value}"]`;
-              if (isSelectorUnique(selector)) {
-                return selector;
+              const ariaSelector = `${element.tagName.toLowerCase()}[${attr}="${CSS.escape(value)}"]`;
+              if (isSelectorUnique(ariaSelector)) {
+                return ariaSelector;
               }
             }
           }
 
-          // 4. Now try the CSS selector generator library for more complex cases
-          try {
-            // Create a temporary generator in the page context
-            // Note: This is a workaround since we can't pass the CssSelectorGenerator directly
-            // We have to recreate it in the browser context
-            const generatorScript = document.createElement("script");
-            generatorScript.textContent = `
-              window.__generateSelector = function(element) {
-                if (!window.CssSelectorGenerator) {
-                  // Define a simplified version if the library isn't loaded
-                  class SimpleSelectorGenerator {
-                    getSelector(el) {
-                      // Skip the simple cases we already tried above
-                      
-                      // Try unique classes
-                      const classes = Array.from(el.classList).filter(c => 
-                        !['dark', 'light', 'theme-dark', 'theme-light', 'night-mode', 'day-mode'].includes(c) &&
-                        !/^(css-|sc-|e-)/.test(c)
-                      );
-                      
-                      if (classes.length > 0) {
-                        const selector = el.tagName.toLowerCase() + '.' + classes.join('.');
-                        if (document.querySelectorAll(selector).length === 1) {
-                          return selector;
-                        }
-                        
-                        // Try individual classes
-                        for (const cls of classes) {
-                          const singleClassSelector = el.tagName.toLowerCase() + '.' + cls;
-                          if (document.querySelectorAll(singleClassSelector).length === 1) {
-                            return singleClassSelector;
-                          }
-                        }
-                      }
-                      
-                      // Try unique path
-                      let current = el;
-                      let path = '';
-                      let iterations = 0;
-                      
-                      while (current && iterations < 4) {
-                        let part = current.tagName.toLowerCase();
-                        
-                        if (current.id) {
-                          part = '#' + current.id;
-                          path = part + (path ? ' > ' + path : '');
-                          break;
-                        }
-                        
-                        // Add position if needed
-                        if (current.parentElement) {
-                          const siblings = Array.from(current.parentElement.children).filter(
-                            node => node.tagName === current.tagName
-                          );
-                          
-                          if (siblings.length > 1) {
-                            const index = siblings.indexOf(current) + 1;
-                            part += ':nth-of-type(' + index + ')';
-                          }
-                        }
-                        
-                        path = part + (path ? ' > ' + path : '');
-                        current = current.parentElement;
-                        iterations++;
-                      }
-                      
-                      return path;
-                    }
-                  }
-                  window.CssSelectorGenerator = SimpleSelectorGenerator;
+          // Try name, placeholder, for attributes (useful for form elements)
+          const formAttributes = ["name", "placeholder", "for"];
+
+          for (const attr of formAttributes) {
+            const value = element.getAttribute(attr);
+            if (value) {
+              const formSelector = `${element.tagName.toLowerCase()}[${attr}="${CSS.escape(value)}"]`;
+              if (isSelectorUnique(formSelector)) {
+                return formSelector;
+              }
+            }
+          }
+
+          // Try to use classes, excluding dynamic/generated ones
+          if (element.className && typeof element.className === "string") {
+            const classes = element.className
+              .split(/\s+/)
+              .filter((c) => c.length > 0);
+
+            // Filter out likely dynamic classes (those with hashes, auto-generated ones)
+            const isLikelyDynamicClass = (cls: string): boolean => {
+              return (
+                /^[a-z0-9]+$/.test(cls) || // Single hash-like name
+                /^[a-z]+(-[a-z0-9]+){2,}$/.test(cls) || // BEM-style with numbers
+                /^[a-z]+-[a-zA-Z0-9]{4,}$/.test(cls) || // framework-hash pattern
+                /css-[a-zA-Z0-9]+/.test(cls) || // css modules
+                /^(ng|vue|jsx)-/.test(cls)
+              ); // Framework prefixes
+            };
+
+            const stableClasses = classes.filter(
+              (c) => !isLikelyDynamicClass(c),
+            );
+
+            if (stableClasses.length > 0) {
+              // Try with tag and all stable classes
+              const classSelector = `${element.tagName.toLowerCase()}.${stableClasses.map((c) => CSS.escape(c)).join(".")}`;
+              if (isSelectorUnique(classSelector)) {
+                return classSelector;
+              }
+
+              // Try with tag and individual classes
+              for (const cls of stableClasses) {
+                const singleClassSelector = `${element.tagName.toLowerCase()}.${CSS.escape(cls)}`;
+                if (isSelectorUnique(singleClassSelector)) {
+                  return singleClassSelector;
                 }
-                
-                const generator = new window.CssSelectorGenerator();
-                return generator.getSelector(element);
               }
-            `;
-            document.head.appendChild(generatorScript);
+            }
+          }
 
-            // Use the global function
-            // @ts-expect-error - This function is defined dynamically in the script above
-            const selector = window.__generateSelector(element);
+          // Try text content for elements where text is unlikely to change
+          const textContent = element.textContent?.trim();
+          if (
+            textContent &&
+            textContent.length > 0 &&
+            textContent.length < 50
+          ) {
+            // Especially useful for buttons, links and headings
+            const isTextElement =
+              /^(button|a|h[1-6]|label|li|span|p|div)$/i.test(element.tagName);
 
-            // Clean up
-            document.head.removeChild(generatorScript);
+            if (isTextElement) {
+              // XPath with text is often more reliable for text-based selection
+              const textSelector = `//${element.tagName.toLowerCase()}[text()="${textContent.replace(/"/g, '\\"')}"]`;
+              const elements = document.evaluate(
+                textSelector,
+                document,
+                null,
+                XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+                null,
+              );
 
-            if (selector) {
-              // Test if the selector is unique
+              if (elements.snapshotLength === 1) {
+                return textSelector;
+              }
+
+              // Try contains for partial text match
+              const containsSelector = `//${element.tagName.toLowerCase()}[contains(text(),"${textContent.substring(0, 20).replace(/"/g, '\\"')}")]`;
+              const containsElements = document.evaluate(
+                containsSelector,
+                document,
+                null,
+                XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+                null,
+              );
+
+              if (containsElements.snapshotLength === 1) {
+                return containsSelector;
+              }
+            }
+          }
+
+          // Try to generate a CSS path as a last resort
+          try {
+            // Start with the current element
+            let current = element;
+            const path = [current.tagName.toLowerCase()];
+
+            // Walk up the DOM tree until we find a unique selector or reach the body
+            while (current !== document.body && current.parentElement) {
+              // Check if the path we have so far is unique
+              const selector = path.join(" > ");
               if (isSelectorUnique(selector)) {
                 return selector;
               }
-            }
-          } catch (e) {
-            console.error("CSS Selector Generator error:", e);
-          }
 
-          // 5. If we reached here, try path-based selector as fallback
-          let current = element;
-          let path = "";
-          let depth = 0;
-          const maxDepth = 3;
-
-          while (current && depth < maxDepth) {
-            let part = current.tagName.toLowerCase();
-
-            if (current.id) {
-              part = `#${current.id}`;
-              path = part + (path ? " > " + path : "");
-              break;
-            }
-
-            // Add position if there are multiple siblings
-            if (current.parentElement) {
-              const siblings = Array.from(
-                current.parentElement.children,
-              ).filter((node) => node.tagName === current.tagName);
-
+              // Add more specificity based on the position among siblings
+              const siblings = Array.from(current.parentElement.children);
               if (siblings.length > 1) {
                 const index = siblings.indexOf(current) + 1;
-                part += `:nth-of-type(${index})`;
+                path[0] = `${current.tagName.toLowerCase()}:nth-child(${index})`;
+
+                // Check if the nth-child selector is unique
+                const nthSelector = path.join(" > ");
+                if (isSelectorUnique(nthSelector)) {
+                  return nthSelector;
+                }
               }
+
+              // Move up the DOM tree
+              current = current.parentElement;
+              path.unshift(current.tagName.toLowerCase());
             }
-
-            path = part + (path ? " > " + path : "");
-            current = current.parentElement;
-            depth++;
+          } catch {
+            // If the path generation fails, fall through to the HTML return
           }
 
-          if (path && isSelectorUnique(path)) {
-            return path;
+          // Fallback: Return truncated HTML as before
+          const html = element.outerHTML;
+          const MAX_LENGTH = 500;
+          if (html.length > MAX_LENGTH) {
+            return html.substring(0, MAX_LENGTH) + "...";
           }
-
-          // 6. Last resort - tag name with position
-          return `${element.tagName.toLowerCase()}:nth-of-type(${
-            Array.from(element.parentElement?.children || [])
-              .filter((node) => node.tagName === element.tagName)
-              .indexOf(element) + 1
-          })`;
+          return html;
         },
         { x, y },
       );
@@ -1295,6 +1368,7 @@ export class StagehandAgentHandler {
   private async recordAction(
     action: AgentAction,
     result: ActionExecutionResult,
+    capturedElement: string | null = null,
   ): Promise<void> {
     try {
       const timestamp = new Date().toISOString();
@@ -1310,10 +1384,34 @@ export class StagehandAgentHandler {
         case "double_click":
         case "doubleClick": {
           const { x, y, button = "left" } = action;
-          const selector = await this.generateSelector(
-            x as number,
-            y as number,
-          );
+          let selector = null;
+
+          // Use the element captured during click execution if available
+          if (capturedElement) {
+            try {
+              const elemData = JSON.parse(capturedElement);
+
+              // Generate selector from captured element data
+              if (elemData.id) {
+                selector = elemData.id;
+              } else if (
+                elemData.tagName &&
+                elemData.textContent &&
+                elemData.textContent.length < 100
+              ) {
+                selector = `//${elemData.tagName}[text()="${elemData.textContent}"]`;
+              } else {
+                selector = elemData.outerHTML;
+              }
+            } catch {
+              // Fallback to outerHTML if JSON parsing fails
+              selector = capturedElement;
+            }
+          } else {
+            // Fallback to the old method if no captured element
+            selector = await this.generateSelector(x as number, y as number);
+          }
+
           recordedAction = {
             ...recordedAction,
             selector,
