@@ -1135,7 +1135,7 @@ export class StagehandAgentHandler {
             // Start with the current element
             let current = element;
             const path = [current.tagName.toLowerCase()];
-
+            
             // Walk up the DOM tree until we find a unique selector or reach the body
             while (current !== document.body && current.parentElement) {
               // Check if the path we have so far is unique
@@ -1143,35 +1143,56 @@ export class StagehandAgentHandler {
               if (isSelectorUnique(selector)) {
                 return selector;
               }
-
+              
               // Add more specificity based on the position among siblings
               const siblings = Array.from(current.parentElement.children);
               if (siblings.length > 1) {
                 const index = siblings.indexOf(current) + 1;
                 path[0] = `${current.tagName.toLowerCase()}:nth-child(${index})`;
-
+                
                 // Check if the nth-child selector is unique
                 const nthSelector = path.join(" > ");
                 if (isSelectorUnique(nthSelector)) {
                   return nthSelector;
                 }
               }
-
+              
               // Move up the DOM tree
               current = current.parentElement;
               path.unshift(current.tagName.toLowerCase());
             }
           } catch {
-            // If the path generation fails, fall through to the HTML return
+            // If the path generation fails, fall through to the guaranteed selector
           }
 
-          // Fallback: Return truncated HTML as before
-          const html = element.outerHTML;
-          const MAX_LENGTH = 500;
-          if (html.length > MAX_LENGTH) {
-            return html.substring(0, MAX_LENGTH) + "...";
+          // Generate a guaranteed selector path as the final fallback
+          // This creates a full path with nth-child for every element in the hierarchy
+          try {
+            // Build a full path with nth-child for each node
+            let current = element;
+            const pathSegments = [];
+            
+            while (current && current !== document.body && current.parentElement) {
+              const parent = current.parentElement;
+              const siblings = Array.from(parent.children);
+              const index = siblings.indexOf(current) + 1;
+              
+              // Create a selector segment with tag name and nth-child
+              pathSegments.unshift(`${current.tagName.toLowerCase()}:nth-child(${index})`);
+              
+              // Move up the hierarchy
+              current = parent;
+            }
+            
+            // Include body in the path
+            pathSegments.unshift("body");
+            
+            // Return the complete path
+            return pathSegments.join(" > ");
+          } catch (e) {
+            // Absolute last resort - if everything else fails
+            return `${element.tagName.toLowerCase()}`;
           }
-          return html;
         },
         { x, y },
       );
