@@ -378,7 +378,7 @@ export class StagehandAgentHandler {
         // Handle the case for "doubleClick" as well for backward compatibility
         case "doubleClick": {
           const { x, y } = action;
-          
+
           // Get the element at this position BEFORE clicking
           selector = await this.generateSelector(x as number, y as number);
           targetElement = await this.stagehandPage.page.evaluate(
