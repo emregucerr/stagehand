@@ -255,6 +255,8 @@ export class StagehandAgentHandler {
   ): Promise<ActionExecutionResult> {
     let result: ActionExecutionResult = { success: false };
     let targetElement: string | null = null;
+    let selector: string | null = null;
+    console.log("executing action", action);
 
     try {
       switch (action.type) {
@@ -263,6 +265,12 @@ export class StagehandAgentHandler {
 
           // Get the element at this position BEFORE clicking
           // This ensures we capture the exact element that will be clicked
+          selector = await this.generateSelector(x as number, y as number);
+          this.logger({
+            category: "agent",
+            message: `Clicked element selector: ${selector}`,
+            level: 1,
+          });
           targetElement = await this.stagehandPage.page.evaluate(
             (coords) => {
               const elem = document.elementFromPoint(coords.x, coords.y);
@@ -325,6 +333,7 @@ export class StagehandAgentHandler {
           const { x, y } = action;
 
           // Get the element at this position BEFORE clicking
+          selector = await this.generateSelector(x as number, y as number);
           targetElement = await this.stagehandPage.page.evaluate(
             (coords) => {
               const elem = document.elementFromPoint(coords.x, coords.y);
@@ -369,8 +378,9 @@ export class StagehandAgentHandler {
         // Handle the case for "doubleClick" as well for backward compatibility
         case "doubleClick": {
           const { x, y } = action;
-
+          
           // Get the element at this position BEFORE clicking
+          selector = await this.generateSelector(x as number, y as number);
           targetElement = await this.stagehandPage.page.evaluate(
             (coords) => {
               const elem = document.elementFromPoint(coords.x, coords.y);
@@ -699,7 +709,10 @@ export class StagehandAgentHandler {
     }
 
     // Record the action and its result
-    await this.recordAction(action, result, targetElement);
+    console.log("targetElement", targetElement);
+    console.log("action", action);
+    console.log("selector", selector);
+    await this.recordAction(action, result, targetElement, selector);
 
     return result;
   }
@@ -1396,7 +1409,15 @@ export class StagehandAgentHandler {
     action: AgentAction,
     result: ActionExecutionResult,
     capturedElement: string | null = null,
+    selector: string | null = null,
   ): Promise<void> {
+    this.logger({
+      category: "agent",
+      message: `Recording action: ${action.type}`,
+      level: 1,
+    });
+    console.log("capturedElement", capturedElement);
+    console.log("selector", selector);
     try {
       const timestamp = new Date().toISOString();
       let recordedAction: RecordedAction = {
@@ -1411,33 +1432,49 @@ export class StagehandAgentHandler {
         case "double_click":
         case "doubleClick": {
           const { x, y, button = "left" } = action;
-          let selector = null;
+          //let selector = null;
+          this.logger({
+            category: "agent",
+            message: `Recording click action: ${x}, ${y}, ${button}`,
+            level: 1,
+          });
 
           // Use the element captured during click execution if available
-          if (capturedElement) {
-            try {
-              const elemData = JSON.parse(capturedElement);
+          // if (capturedElement) {
+          //   try {
+          //     const elemData = JSON.parse(capturedElement);
 
-              // Generate selector from captured element data
-              if (elemData.id) {
-                selector = elemData.id;
-              } else if (
-                elemData.tagName &&
-                elemData.textContent &&
-                elemData.textContent.length < 100
-              ) {
-                selector = `//${elemData.tagName}[text()="${elemData.textContent}"]`;
-              } else {
-                selector = elemData.outerHTML;
-              }
-            } catch {
-              // Fallback to outerHTML if JSON parsing fails
-              selector = capturedElement;
-            }
-          } else {
-            // Fallback to the old method if no captured element
-            selector = await this.generateSelector(x as number, y as number);
-          }
+          //     // Generate selector from captured element data
+          //     if (elemData.id) {
+          //       selector = elemData.id;
+          //     } else if (
+          //       elemData.tagName &&
+          //       elemData.textContent &&
+          //       elemData.textContent.length < 100
+          //     ) {
+          //       selector = `//${elemData.tagName}[text()="${elemData.textContent}"]`;
+          //     } else {
+          //       selector = elemData.outerHTML;
+          //     }
+          //   } catch (error) {
+          //     // Fallback to outerHTML if JSON parsing fails
+          //     this.logger({
+          //       category: "agent",
+          //       message: `Error parsing captured element: ${error}`,
+          //       level: 0,
+          //     });
+          //     selector = capturedElement;
+          //     selector = await this.generateSelector(x as number, y as number);
+          //   }
+          // } else {
+          //   // Fallback to the old method if no captured element
+          //   this.logger({
+          //     category: "agent",
+          //     message: "Falling back to generateSelector",
+          //     level: 1,
+          //   });
+          //   selector = await this.generateSelector(x as number, y as number);
+          // }
 
           recordedAction = {
             ...recordedAction,
