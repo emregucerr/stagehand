@@ -980,39 +980,59 @@ export class StagehandAgentHandler {
     }
   }
 
-  /**
-   * Generate a robust selector for an element
-   */
+  // ---------------------------------------------------------------------------
+  //  generateSelector.ts   – radix-safe & class-trimmed
+  // ---------------------------------------------------------------------------
   private async generateSelector(x: number, y: number): Promise<string | null> {
     try {
       return await this.stagehandPage.page.evaluate(
         ({ x, y }) => {
-          // Get the element at the coordinates
-          const element = document.elementFromPoint(x, y);
-
-          // If no element is found, return null
-          if (!element) return null;
-
-          // Helper to check if a selector uniquely identifies the element
-          const isSelectorUnique = (selector: string): boolean => {
+          /*──────────────────────── helpers ────────────────────────*/
+          const isSelectorUnique = (sel: string) => {
             try {
-              const elements = document.querySelectorAll(selector);
-              return elements.length === 1 && elements[0] === element;
+              const els = document.querySelectorAll(sel);
+              return els.length === 1 && els[0] === element;
             } catch {
               return false;
             }
           };
 
-          // Try ID selector (highest priority)
-          if (element.id) {
-            const idSelector = `#${CSS.escape(element.id)}`;
-            if (isSelectorUnique(idSelector)) {
-              return idSelector;
-            }
+          // … IDs that should never be used verbatim
+          const isLikelyDynamicId = (id: string) =>
+            id.includes(":") ||
+            /^radix-/.test(id) ||
+            /^[A-Za-z]+-[0-9a-f]{6,}$/.test(id);
+
+          const stabiliseIdSelector = (sel: string) => {
+            if (!sel.startsWith("#")) return sel;
+            const raw = sel.slice(1).replace(/\\:/g, ":");
+            if (raw.startsWith("radix-")) return `[id^="radix-"]:visible`;
+            if (raw.includes(":")) return `[id="${raw}"]:visible`;
+            return sel;
+          };
+
+          // reject variant / hashed classes
+          const isLikelyDynamicClass = (cls: string) =>
+            cls.includes(":") || // ← NEW (hover:, md:, …
+            /^[a-z0-9]+$/.test(cls) ||
+            /^[a-z]+(-[a-z0-9]+){2,}$/.test(cls) ||
+            /^[a-z]+-[A-Za-z0-9]{4,}$/.test(cls) ||
+            /css-[A-Za-z0-9]+/.test(cls) ||
+            /^(ng|vue|jsx)-/.test(cls);
+          /*──────────────────────────────────────────────────────────*/
+
+          /*──────────────────────── acquire element ────────────────*/
+          const element = document.elementFromPoint(x, y);
+          if (!element) return null;
+
+          /*──────────────────────── 1) id selector ─────────────────*/
+          if (element.id && !isLikelyDynamicId(element.id)) {
+            const idSel = `#${CSS.escape(element.id)}`;
+            if (isSelectorUnique(idSel)) return idSel;
           }
 
-          // Try data-* attributes frequently used for testing
-          const testAttributes = [
+          /*──────────────────────── 2) data-* attrs ───────────────*/
+          const testAttrs = [
             "data-testid",
             "data-test",
             "data-cy",
@@ -1020,205 +1040,137 @@ export class StagehandAgentHandler {
             "data-qa",
             "data-test-id",
           ];
-
-          for (const attr of testAttributes) {
-            const value = element.getAttribute(attr);
-            if (value) {
-              const dataSelector = `[${attr}="${CSS.escape(value)}"]`;
-              if (isSelectorUnique(dataSelector)) {
-                return dataSelector;
-              }
+          for (const attr of testAttrs) {
+            const val = element.getAttribute(attr);
+            if (val) {
+              const sel = `[${attr}="${CSS.escape(val)}"]`;
+              if (isSelectorUnique(sel)) return sel;
             }
           }
 
-          // Try accessibility attributes
-          const ariaAttributes = [
+          /*──────────────────────── 3) aria attrs ─────────────────*/
+          const ariaAttrs = [
             "aria-label",
             "aria-labelledby",
             "aria-describedby",
             "aria-controls",
             "role",
           ];
-
-          for (const attr of ariaAttributes) {
-            const value = element.getAttribute(attr);
-            if (value) {
-              const ariaSelector = `${element.tagName.toLowerCase()}[${attr}="${CSS.escape(value)}"]`;
-              if (isSelectorUnique(ariaSelector)) {
-                return ariaSelector;
-              }
+          for (const attr of ariaAttrs) {
+            const val = element.getAttribute(attr);
+            if (val) {
+              const sel = `${element.tagName.toLowerCase()}[${attr}="${CSS.escape(val)}"]`;
+              if (isSelectorUnique(sel)) return sel;
             }
           }
 
-          // Try name, placeholder, for attributes (useful for form elements)
-          const formAttributes = ["name", "placeholder", "for"];
-
-          for (const attr of formAttributes) {
-            const value = element.getAttribute(attr);
-            if (value) {
-              const formSelector = `${element.tagName.toLowerCase()}[${attr}="${CSS.escape(value)}"]`;
-              if (isSelectorUnique(formSelector)) {
-                return formSelector;
-              }
+          /*──────────────────────── 4) form attrs ─────────────────*/
+          const formAttrs = ["name", "placeholder", "for"];
+          for (const attr of formAttrs) {
+            const val = element.getAttribute(attr);
+            if (val) {
+              const sel = `${element.tagName.toLowerCase()}[${attr}="${CSS.escape(val)}"]`;
+              if (isSelectorUnique(sel)) return sel;
             }
           }
 
-          // Try to use classes, excluding dynamic/generated ones
+          /*──────────────────────── 5) stable classes ─────────────*/
           if (element.className && typeof element.className === "string") {
-            const classes = element.className
-              .split(/\s+/)
-              .filter((c) => c.length > 0);
+            const classes = element.className.split(/\s+/).filter(Boolean);
+            const stable = classes.filter((c) => !isLikelyDynamicClass(c));
 
-            // Filter out likely dynamic classes (those with hashes, auto-generated ones)
-            const isLikelyDynamicClass = (cls: string): boolean => {
-              return (
-                /^[a-z0-9]+$/.test(cls) || // Single hash-like name
-                /^[a-z]+(-[a-z0-9]+){2,}$/.test(cls) || // BEM-style with numbers
-                /^[a-z]+-[a-zA-Z0-9]{4,}$/.test(cls) || // framework-hash pattern
-                /css-[a-zA-Z0-9]+/.test(cls) || // css modules
-                /^(ng|vue|jsx)-/.test(cls)
-              ); // Framework prefixes
-            };
+            if (stable.length) {
+              const core = stable.slice(0, 3); // keep ≤ 3
+              const tag = element.tagName.toLowerCase();
 
-            const stableClasses = classes.filter(
-              (c) => !isLikelyDynamicClass(c),
-            );
+              // tag + all kept classes
+              const allSel = `${tag}.${core.map(CSS.escape).join(".")}`;
+              if (isSelectorUnique(allSel)) return allSel;
 
-            if (stableClasses.length > 0) {
-              // Try with tag and all stable classes
-              const classSelector = `${element.tagName.toLowerCase()}.${stableClasses.map((c) => CSS.escape(c)).join(".")}`;
-              if (isSelectorUnique(classSelector)) {
-                return classSelector;
-              }
-
-              // Try with tag and individual classes
-              for (const cls of stableClasses) {
-                const singleClassSelector = `${element.tagName.toLowerCase()}.${CSS.escape(cls)}`;
-                if (isSelectorUnique(singleClassSelector)) {
-                  return singleClassSelector;
-                }
+              // tag + single class
+              for (const cls of core) {
+                const single = `${tag}.${CSS.escape(cls)}`;
+                if (isSelectorUnique(single)) return single;
               }
             }
           }
 
-          // Try text content for elements where text is unlikely to change
-          const textContent = element.textContent?.trim();
-          if (
-            textContent &&
-            textContent.length > 0 &&
-            textContent.length < 50
-          ) {
-            // Especially useful for buttons, links and headings
-            const isTextElement =
-              /^(button|a|h[1-6]|label|li|span|p|div)$/i.test(element.tagName);
+          /*──────────────────────── 6) text-based xpath ───────────*/
+          const text = element.textContent?.trim();
+          if (text && text.length && text.length < 50) {
+            const tag = element.tagName.toLowerCase();
+            if (/^(button|a|h[1-6]|label|li|span|p|div)$/i.test(tag)) {
+              const exact = `//${tag}[text()="${text.replace(/"/g, '\\"')}"]`;
+              if (
+                document.evaluate(
+                  exact,
+                  document,
+                  null,
+                  XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+                  null,
+                ).snapshotLength === 1
+              )
+                return exact;
 
-            if (isTextElement) {
-              // XPath with text is often more reliable for text-based selection
-              const textSelector = `//${element.tagName.toLowerCase()}[text()="${textContent.replace(/"/g, '\\"')}"]`;
-              const elements = document.evaluate(
-                textSelector,
-                document,
-                null,
-                XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
-                null,
-              );
-
-              if (elements.snapshotLength === 1) {
-                return textSelector;
-              }
-
-              // Try contains for partial text match
-              const containsSelector = `//${element.tagName.toLowerCase()}[contains(text(), "${textContent.substring(0, 20).replace(/"/g, '\\"')}")]`;
-              const containsElements = document.evaluate(
-                containsSelector,
-                document,
-                null,
-                XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
-                null,
-              );
-
-              if (containsElements.snapshotLength === 1) {
-                return containsSelector;
-              }
+              const partial = `//${tag}[contains(text(),"${text.slice(0, 20).replace(/"/g, '\\"')}")]`;
+              if (
+                document.evaluate(
+                  partial,
+                  document,
+                  null,
+                  XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+                  null,
+                ).snapshotLength === 1
+              )
+                return partial;
             }
           }
 
-          // Try to generate a CSS path as a last resort
+          /*──────────────────────── 7) css path best-effort ───────*/
           try {
-            // Start with the current element
-            let current = element;
-            const path = [current.tagName.toLowerCase()];
+            let cur: Element | null = element;
+            const path: string[] = [cur.tagName.toLowerCase()];
 
-            // Walk up the DOM tree until we find a unique selector or reach the body
-            while (current !== document.body && current.parentElement) {
-              // Check if the path we have so far is unique
-              const selector = path.join(" > ");
-              if (isSelectorUnique(selector)) {
-                return selector;
+            while (cur !== document.body && cur.parentElement) {
+              const sel = path.join(" > ");
+              if (isSelectorUnique(sel)) return sel;
+
+              const sibs = Array.from(cur.parentElement.children);
+              if (sibs.length > 1) {
+                const idx = sibs.indexOf(cur) + 1;
+                path[0] = `${cur.tagName.toLowerCase()}:nth-child(${idx})`;
+                const nth = path.join(" > ");
+                if (isSelectorUnique(nth)) return nth;
               }
-
-              // Add more specificity based on the position among siblings
-              const siblings = Array.from(current.parentElement.children);
-              if (siblings.length > 1) {
-                const index = siblings.indexOf(current) + 1;
-                path[0] = `${current.tagName.toLowerCase()}:nth-child(${index})`;
-
-                // Check if the nth-child selector is unique
-                const nthSelector = path.join(" > ");
-                if (isSelectorUnique(nthSelector)) {
-                  return nthSelector;
-                }
-              }
-
-              // Move up the DOM tree
-              current = current.parentElement;
-              path.unshift(current.tagName.toLowerCase());
+              cur = cur.parentElement;
+              path.unshift(cur.tagName.toLowerCase());
             }
           } catch {
-            // If the path generation fails, fall through to the guaranteed selector
+            /* ignore */
           }
 
-          // Generate a guaranteed selector path as the final fallback
-          // This creates a full path with nth-child for every element in the hierarchy
+          /*──────────────────────── 8) guaranteed full path ───────*/
           try {
-            // Build a full path with nth-child for each node
-            let current = element;
-            const pathSegments = [];
-
-            while (
-              current &&
-              current !== document.body &&
-              current.parentElement
-            ) {
-              const parent = current.parentElement;
-              const siblings = Array.from(parent.children);
-              const index = siblings.indexOf(current) + 1;
-
-              // Create a selector segment with tag name and nth-child
-              pathSegments.unshift(
-                `${current.tagName.toLowerCase()}:nth-child(${index})`,
-              );
-
-              // Move up the hierarchy
-              current = parent;
+            let cur: Element | null = element;
+            const segs: string[] = [];
+            while (cur && cur !== document.body && cur.parentElement) {
+              const idx =
+                Array.from(cur.parentElement.children).indexOf(cur) + 1;
+              segs.unshift(`${cur.tagName.toLowerCase()}:nth-child(${idx})`);
+              cur = cur.parentElement;
             }
-
-            // Include body in the path
-            pathSegments.unshift("body");
-
-            // Return the complete path
-            return pathSegments.join(" > ");
+            segs.unshift("body");
+            return stabiliseIdSelector(segs.join(" > "));
           } catch {
-            // Absolute last resort - if everything else fails
-            return `${element.tagName.toLowerCase()}`;
+            return stabiliseIdSelector(element.tagName.toLowerCase());
           }
         },
         { x, y },
       );
-    } catch (error) {
+    } catch (err) {
       this.logger({
         category: "agent",
-        message: `Error generating selector: ${error}`,
+        message: `Error generating selector: ${err}`,
         level: 0,
       });
       return null;
