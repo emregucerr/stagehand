@@ -258,6 +258,22 @@ export class StagehandAgentHandler {
     let selector: string | null = null;
     console.log("executing action", action);
 
+    // Generate screenshot directory path with timestamp
+    const screenshot_dir_path = `screenshots/${Date.now()}`;
+
+    const screenshotsDir = path.resolve(screenshot_dir_path);
+    if (!fs.existsSync(screenshotsDir)) {
+      fs.mkdirSync(screenshotsDir, { recursive: true });
+    }
+
+    const before_screenshot_path = path.join(screenshotsDir, `before.png`);
+    const after_screenshot_path = path.join(screenshotsDir, `after.png`);
+
+    // Take a screenshot before the action
+    await this.stagehandPage.page.screenshot({
+      path: before_screenshot_path,
+    });
+    console.log("before_screenshot_path", before_screenshot_path);
     try {
       switch (action.type) {
         case "click": {
@@ -706,6 +722,12 @@ export class StagehandAgentHandler {
         success: false,
         error: errorMessage,
       };
+    } finally {
+      // Take a screenshot after the action
+      await this.stagehandPage.page.screenshot({
+        path: after_screenshot_path,
+      });
+      console.log("after_screenshot_path", after_screenshot_path);
     }
 
     // Record the action and its result
