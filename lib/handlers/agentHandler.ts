@@ -1019,7 +1019,6 @@ export class StagehandAgentHandler {
             }
           };
 
-          // … IDs that should never be used verbatim
           const isLikelyDynamicId = (id: string) =>
             id.includes(":") ||
             /^radix-/.test(id) ||
@@ -1033,9 +1032,28 @@ export class StagehandAgentHandler {
             return sel;
           };
 
-          // reject variant / hashed classes
+          // ── NEW: unique prefix selector for dynamic attr values ──
+          const stabiliseAttrSelector = (
+            tag: string,
+            attr: string,
+            value: string,
+          ): string | null => {
+            if (!isLikelyDynamicId(value)) {
+              return `${tag}[${attr}="${CSS.escape(value)}"]`;
+            }
+            if (value.startsWith("radix-")) {
+              const base = `${tag}[${attr}^="radix-"]:visible`;
+              const list = Array.from(document.querySelectorAll(base));
+              if (list.length === 1) return base;
+
+              const i = list.indexOf(element);
+              if (i !== -1) return `${base}:nth-of-type(${i + 1})`;
+            }
+            return null; // caller keeps looking
+          };
+
           const isLikelyDynamicClass = (cls: string) =>
-            cls.includes(":") || // ← NEW (hover:, md:, …
+            cls.includes(":") || // hover:, md:, …
             /^[a-z0-9]+$/.test(cls) ||
             /^[a-z]+(-[a-z0-9]+){2,}$/.test(cls) ||
             /^[a-z]+-[A-Za-z0-9]{4,}$/.test(cls) ||
@@ -1080,10 +1098,11 @@ export class StagehandAgentHandler {
           ];
           for (const attr of ariaAttrs) {
             const val = element.getAttribute(attr);
-            if (val) {
-              const sel = `${element.tagName.toLowerCase()}[${attr}="${CSS.escape(val)}"]`;
-              if (isSelectorUnique(sel)) return sel;
-            }
+            if (!val) continue;
+
+            const tag = element.tagName.toLowerCase();
+            const sel = stabiliseAttrSelector(tag, attr, val);
+            if (sel && isSelectorUnique(sel)) return sel;
           }
 
           /*──────────────────────── 4) form attrs ─────────────────*/
@@ -1105,11 +1124,9 @@ export class StagehandAgentHandler {
               const core = stable.slice(0, 3); // keep ≤ 3
               const tag = element.tagName.toLowerCase();
 
-              // tag + all kept classes
               const allSel = `${tag}.${core.map(CSS.escape).join(".")}`;
               if (isSelectorUnique(allSel)) return allSel;
 
-              // tag + single class
               for (const cls of core) {
                 const single = `${tag}.${CSS.escape(cls)}`;
                 if (isSelectorUnique(single)) return single;
