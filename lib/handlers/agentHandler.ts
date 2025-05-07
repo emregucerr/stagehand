@@ -817,17 +817,47 @@ export class StagehandAgentHandler {
       // Inject cursor and highlight elements
       await this.stagehandPage.page.evaluate(`
         (function(cursorId, highlightId) {
+          // Function to detect if background is dark
+          function isDarkBackground(x, y) {
+            const element = document.elementFromPoint(x, y);
+            if (!element) return false;
+            
+            const style = window.getComputedStyle(element);
+            const backgroundColor = style.backgroundColor;
+            
+            // Parse RGB values
+            const rgb = backgroundColor.match(/\\d+/g);
+            if (!rgb || rgb.length < 3) return false;
+            
+            // Calculate relative luminance
+            const r = parseInt(rgb[0]) / 255;
+            const g = parseInt(rgb[1]) / 255;
+            const b = parseInt(rgb[2]) / 255;
+            
+            const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+            return luminance < 0.5;
+          }
+
           // Create cursor element
           const cursor = document.createElement('div');
           cursor.id = cursorId;
           
-          // Use the provided SVG for a custom cursor
-          cursor.innerHTML = \`
-          <svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 28 28" width="28" height="28">
-            <polygon fill="#000000" points="9.2,7.3 9.2,18.5 12.2,15.6 12.6,15.5 17.4,15.5"/>
-            <rect x="12.5" y="13.6" transform="matrix(0.9221 -0.3871 0.3871 0.9221 -5.7605 6.5909)" width="2" height="8" fill="#000000"/>
-          </svg>
-          \`;
+          // Function to update cursor SVG based on background
+          function updateCursorSVG(x, y) {
+            const isDark = isDarkBackground(x, y);
+            const fillColor = isDark ? '#FFFFFF' : '#000000';
+            const strokeColor = isDark ? '#000000' : 'none';
+            
+            cursor.innerHTML = \`
+            <svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 28 28" width="28" height="28">
+              <polygon fill="\${fillColor}" stroke="\${strokeColor}" stroke-width="1" points="9.2,7.3 9.2,18.5 12.2,15.6 12.6,15.5 17.4,15.5"/>
+              <rect x="12.5" y="13.6" transform="matrix(0.9221 -0.3871 0.3871 0.9221 -5.7605 6.5909)" width="2" height="8" fill="\${fillColor}" stroke="\${strokeColor}" stroke-width="1"/>
+            </svg>
+            \`;
+          }
+          
+          // Initial cursor SVG
+          updateCursorSVG(0, 0);
           
           // Style the cursor
           cursor.style.position = 'absolute';
@@ -865,6 +895,9 @@ export class StagehandAgentHandler {
           window.__updateCursorPosition = function(x, y) {
             if (cursor) {
               cursor.style.transform = \`translate(\${x - 4}px, \${y - 4}px)\`;
+              
+              // Update cursor SVG based on background color
+              updateCursorSVG(x, y);
               
               // Store the cursor position for later use by other functions
               window.__stagehandCursorX = x;
