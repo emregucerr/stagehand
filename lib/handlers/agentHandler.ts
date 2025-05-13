@@ -1060,8 +1060,8 @@ export class StagehandAgentHandler {
           const stabiliseIdSelector = (sel: string) => {
             if (!sel.startsWith("#")) return sel;
             const raw = sel.slice(1).replace(/\\:/g, ":");
-            if (raw.startsWith("radix-")) return `[id^="radix-"]:visible`;
-            if (raw.includes(":")) return `[id="${raw}"]:visible`;
+            if (raw.startsWith("radix-")) return `[id^="radix-"]`;
+            if (raw.includes(":")) return `[id="${raw}"]`;
             return sel;
           };
 
@@ -1075,7 +1075,7 @@ export class StagehandAgentHandler {
               return `${tag}[${attr}="${CSS.escape(value)}"]`;
             }
             if (value.startsWith("radix-")) {
-              const base = `${tag}[${attr}^="radix-"]:visible`;
+              const base = `${tag}[${attr}^="radix-"]`;
               const list = Array.from(document.querySelectorAll(base));
               if (list.length === 1) return base;
 
