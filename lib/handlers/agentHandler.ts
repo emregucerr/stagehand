@@ -1036,206 +1036,389 @@ export class StagehandAgentHandler {
   }
 
   // ---------------------------------------------------------------------------
-  //  generateSelector.ts   – radix-safe & class-trimmed
+  //  Enhanced generateSelector with ancestor-first approach and robust heuristics
   // ---------------------------------------------------------------------------
   private async generateSelector(x: number, y: number): Promise<string | null> {
     try {
       return await this.stagehandPage.page.evaluate(
         ({ x, y }) => {
-          /*──────────────────────── helpers ────────────────────────*/
-          const isSelectorUnique = (sel: string) => {
+          // Performance timeout to prevent infinite loops on large DOMs
+          const startTime = Date.now();
+          const TIMEOUT_MS = 50;
+
+          const isTimedOut = () => Date.now() - startTime > TIMEOUT_MS;
+
+          /*──────────────────────── Enhanced helpers ────────────────────────*/
+          const isSelectorUnique = (sel: string, targetElement: Element) => {
+            if (isTimedOut()) return false;
             try {
               const els = document.querySelectorAll(sel);
-              return els.length === 1 && els[0] === element;
+              return els.length === 1 && els[0] === targetElement;
             } catch {
               return false;
             }
           };
 
+          // Custom CSS escape function that handles numeric starts properly
+          const cssEscape = (str: string): string => {
+            if (!str) return str;
+
+            // Use CSS.escape but fix the numeric start issue
+            let escaped = CSS.escape(str);
+
+            // Fix the space issue after hex escape sequences for numeric starts
+            // CSS.escape turns "1-email" into "\31 -email" but we want "\31-email"
+            escaped = escaped.replace(/\\([0-9a-f]+)\s+(-)/gi, "\\$1$2");
+
+            return escaped;
+          };
+
+          // Enhanced dynamic ID detection with UUID/GUID patterns
           const isLikelyDynamicId = (id: string) =>
             id.includes(":") ||
             /^radix-/.test(id) ||
-            /^[A-Za-z]+-[0-9a-f]{6,}$/.test(id);
+            /^[A-Za-z]+-[0-9a-f]{6,}$/.test(id) ||
+            // UUID/GUID patterns
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+              id,
+            ) ||
+            // Base-62 IDs and other hash patterns
+            /^[A-Za-z0-9]{12,}$/.test(id) ||
+            // React/Vue component IDs
+            /^(react|vue|ng)-[A-Za-z0-9]+/.test(id);
 
-          const stabiliseIdSelector = (sel: string) => {
-            if (!sel.startsWith("#")) return sel;
-            const raw = sel.slice(1).replace(/\\:/g, ":");
-            if (raw.startsWith("radix-")) return `[id^="radix-"]`;
-            if (raw.includes(":")) return `[id="${raw}"]`;
-            return sel;
-          };
-
-          // ── NEW: unique prefix selector for dynamic attr values ──
-          const stabiliseAttrSelector = (
-            tag: string,
-            attr: string,
-            value: string,
-          ): string | null => {
-            if (!isLikelyDynamicId(value)) {
-              return `${tag}[${attr}="${CSS.escape(value)}"]`;
-            }
-            if (value.startsWith("radix-")) {
-              const base = `${tag}[${attr}^="radix-"]`;
-              const list = Array.from(document.querySelectorAll(base));
-              if (list.length === 1) return base;
-
-              const i = list.indexOf(element);
-              if (i !== -1) return `${base}:nth-of-type(${i + 1})`;
-            }
-            return null; // caller keeps looking
-          };
-
+          // Enhanced dynamic class detection
           const isLikelyDynamicClass = (cls: string) =>
-            cls.includes(":") || // hover:, md:, …
-            /^[a-z0-9]+$/.test(cls) ||
-            /^[a-z]+(-[a-z0-9]+){2,}$/.test(cls) ||
-            /^[a-z]+-[A-Za-z0-9]{4,}$/.test(cls) ||
-            /css-[A-Za-z0-9]+/.test(cls) ||
-            /^(ng|vue|jsx)-/.test(cls);
-          /*──────────────────────────────────────────────────────────*/
+            cls.includes(":") || // Tailwind modifiers: hover:, md:, etc.
+            (cls.length > 15 && /^[a-z0-9]+$/.test(cls)) || // Very long lowercase+digit only
+            /\d{2,}/.test(cls) || // Contains 2+ consecutive digits
+            /^css-[a-f0-9]{6,}$/i.test(cls) || // CSS-in-JS hashes
+            /^[a-z]+-[A-Za-z0-9]{6,}$/.test(cls) || // Framework generated
+            /^(ng|vue|jsx|astro|styled)-/.test(cls) || // Framework prefixes
+            (cls.startsWith("_") && cls.length > 8); // Private/generated classes
 
-          /*──────────────────────── acquire element ────────────────*/
+          const getAccessibleName = (element: Element): string | null => {
+            const ariaLabel = element.getAttribute("aria-label");
+            if (ariaLabel) return ariaLabel;
+
+            const textContent = element.textContent?.trim();
+            if (textContent && textContent.length < 50) return textContent;
+
+            return null;
+          };
+
+          const getElementRole = (element: Element): string => {
+            return (
+              element.getAttribute("role") || element.tagName.toLowerCase()
+            );
+          };
+
+          // Find the nearest stable ancestor with good selector attributes
+          const findStableAncestor = (element: Element): Element | null => {
+            let current: Element | null = element;
+
+            while (current && current !== document.body && !isTimedOut()) {
+              // Check for data-test attributes (highest priority)
+              const testAttrs = [
+                "data-testid",
+                "data-test",
+                "data-cy",
+                "data-automation-id",
+                "data-qa",
+                "data-test-id",
+              ];
+
+              for (const attr of testAttrs) {
+                if (current.hasAttribute(attr)) return current;
+              }
+
+              // Check for stable IDs
+              if (current.id && !isLikelyDynamicId(current.id)) {
+                return current;
+              }
+
+              // Check for role with accessible name combination
+              const role = current.getAttribute("role");
+              const accessibleName = getAccessibleName(current);
+              if (role && accessibleName) {
+                return current;
+              }
+
+              // Check for semantic landmarks
+              const semanticTags = [
+                "main",
+                "nav",
+                "header",
+                "footer",
+                "section",
+                "article",
+                "aside",
+              ];
+              if (semanticTags.includes(current.tagName.toLowerCase())) {
+                return current;
+              }
+
+              current = current.parentElement;
+            }
+
+            return null;
+          };
+
+          // Build selector for a specific element (used for both ancestor and target)
+          const buildElementSelector = (
+            element: Element,
+            options: { forbidAncestor?: boolean } = {},
+          ): string | null => {
+            if (isTimedOut()) return null;
+
+            /*──────────────────────── 1) Test attributes (highest priority) ─────────────────*/
+            const testAttrs = [
+              "data-testid",
+              "data-test",
+              "data-cy",
+              "data-automation-id",
+              "data-qa",
+              "data-test-id",
+            ];
+
+            for (const attr of testAttrs) {
+              const val = element.getAttribute(attr);
+              if (val) {
+                const sel = `[${attr}="${cssEscape(val)}"]`;
+                if (isSelectorUnique(sel, element)) return sel;
+              }
+            }
+
+            /*──────────────────────── 2) Stable ID ─────────────────*/
+            if (element.id && !isLikelyDynamicId(element.id)) {
+              const idSel = `#${cssEscape(element.id)}`;
+              if (isSelectorUnique(idSel, element)) return idSel;
+            }
+
+            /*──────────────────────── 3) Role + Accessible Name ─────────────────*/
+            const role = getElementRole(element);
+            const accessibleName = getAccessibleName(element);
+            if (accessibleName) {
+              // Try role + aria-label combination
+              const ariaLabel = element.getAttribute("aria-label");
+              if (ariaLabel) {
+                const sel = `[role="${role}"][aria-label="${cssEscape(ariaLabel)}"]`;
+                if (isSelectorUnique(sel, element)) return sel;
+              }
+
+              // Try tag + text content for interactive elements
+              if (
+                ["button", "a", "h1", "h2", "h3", "h4", "h5", "h6"].includes(
+                  role,
+                )
+              ) {
+                const sel = `${role}:has-text("${cssEscape(accessibleName)}")`;
+                // Fallback to XPath if :has-text not supported
+                try {
+                  if (isSelectorUnique(sel, element)) return sel;
+                } catch {
+                  const xpath = `//${role}[contains(text(), "${accessibleName.replace(/"/g, '\\"')}")]`;
+                  try {
+                    const result = document.evaluate(
+                      xpath,
+                      document,
+                      null,
+                      XPathResult.FIRST_ORDERED_NODE_TYPE,
+                      null,
+                    );
+                    if (result.singleNodeValue === element) return xpath;
+                  } catch {
+                    // Continue to next strategy
+                  }
+                }
+              }
+            }
+
+            /*──────────────────────── 4) Form attributes ─────────────────*/
+            const formAttrs = ["name", "placeholder", "for", "type"];
+            for (const attr of formAttrs) {
+              const val = element.getAttribute(attr);
+              if (val) {
+                const sel = `${element.tagName.toLowerCase()}[${attr}="${cssEscape(val)}"]`;
+                if (isSelectorUnique(sel, element)) return sel;
+              }
+            }
+
+            /*──────────────────────── 5) ARIA attributes ─────────────────*/
+            const ariaAttrs = [
+              "aria-label",
+              "aria-labelledby",
+              "aria-describedby",
+              "aria-controls",
+              "aria-expanded",
+              "aria-selected",
+            ];
+
+            for (const attr of ariaAttrs) {
+              const val = element.getAttribute(attr);
+              if (val && !isLikelyDynamicId(val)) {
+                const sel = `${element.tagName.toLowerCase()}[${attr}="${cssEscape(val)}"]`;
+                if (isSelectorUnique(sel, element)) return sel;
+              }
+            }
+
+            /*──────────────────────── 6) Stable classes ─────────────────*/
+            if (element.className && typeof element.className === "string") {
+              const classes = element.className.split(/\s+/).filter(Boolean);
+              const stableClasses = classes.filter(
+                (cls) => !isLikelyDynamicClass(cls),
+              );
+
+              if (stableClasses.length > 0) {
+                const tag = element.tagName.toLowerCase();
+
+                // Try combination of up to 2 stable classes
+                for (let i = 0; i < Math.min(stableClasses.length, 2); i++) {
+                  const classSelector = stableClasses.slice(0, i + 1);
+                  const sel = `${tag}.${classSelector.map(cssEscape).join(".")}`;
+                  if (isSelectorUnique(sel, element)) return sel;
+                }
+              }
+            }
+
+            /*──────────────────────── 7) Positional with nth-of-type ─────────────────*/
+            if (element.parentElement && !options.forbidAncestor) {
+              const siblings = Array.from(
+                element.parentElement.children,
+              ).filter((el) => el.tagName === element.tagName);
+
+              if (siblings.length > 1) {
+                const index = siblings.indexOf(element) + 1;
+                const sel = `${element.tagName.toLowerCase()}:nth-of-type(${index})`;
+                if (isSelectorUnique(sel, element)) return sel;
+              }
+            }
+
+            return null;
+          };
+
+          /*──────────────────────── Main algorithm ────────────────────────*/
           const element = document.elementFromPoint(x, y);
           if (!element) return null;
 
-          /*──────────────────────── 1) id selector ─────────────────*/
-          if (element.id && !isLikelyDynamicId(element.id)) {
-            const idSel = `#${CSS.escape(element.id)}`;
-            if (isSelectorUnique(idSel)) return idSel;
-          }
+          // Strategy 1: Try to build a direct selector for the element
+          const directSelector = buildElementSelector(element);
+          if (directSelector) return directSelector;
 
-          /*──────────────────────── 2) data-* attrs ───────────────*/
-          const testAttrs = [
-            "data-testid",
-            "data-test",
-            "data-cy",
-            "data-automation-id",
-            "data-qa",
-            "data-test-id",
-          ];
-          for (const attr of testAttrs) {
-            const val = element.getAttribute(attr);
-            if (val) {
-              const sel = `[${attr}="${CSS.escape(val)}"]`;
-              if (isSelectorUnique(sel)) return sel;
-            }
-          }
+          // Strategy 2: Ancestor-first approach
+          const stableAncestor = findStableAncestor(element.parentElement);
+          if (stableAncestor && !isTimedOut()) {
+            const ancestorSelector = buildElementSelector(stableAncestor);
+            if (ancestorSelector) {
+              // Build a relative selector from ancestor to target
+              const leafSelector = buildElementSelector(element, {
+                forbidAncestor: true,
+              });
+              if (leafSelector) {
+                const combinedSelector = `${ancestorSelector} ${leafSelector}`;
+                if (isSelectorUnique(combinedSelector, element)) {
+                  return combinedSelector;
+                }
+              }
 
-          /*──────────────────────── 3) aria attrs ─────────────────*/
-          const ariaAttrs = [
-            "aria-label",
-            "aria-labelledby",
-            "aria-describedby",
-            "aria-controls",
-            "role",
-          ];
-          for (const attr of ariaAttrs) {
-            const val = element.getAttribute(attr);
-            if (!val) continue;
+              // Fallback: use positional selector from ancestor
+              let current = element;
+              const pathSegments: string[] = [];
 
-            const tag = element.tagName.toLowerCase();
-            const sel = stabiliseAttrSelector(tag, attr, val);
-            if (sel && isSelectorUnique(sel)) return sel;
-          }
+              while (current && current !== stableAncestor && !isTimedOut()) {
+                if (current.parentElement) {
+                  const siblings = Array.from(
+                    current.parentElement.children,
+                  ).filter((el) => el.tagName === current.tagName);
+                  const index = siblings.indexOf(current) + 1;
+                  pathSegments.unshift(
+                    `${current.tagName.toLowerCase()}:nth-of-type(${index})`,
+                  );
+                }
+                current = current.parentElement;
+              }
 
-          /*──────────────────────── 4) form attrs ─────────────────*/
-          const formAttrs = ["name", "placeholder", "for"];
-          for (const attr of formAttrs) {
-            const val = element.getAttribute(attr);
-            if (val) {
-              const sel = `${element.tagName.toLowerCase()}[${attr}="${CSS.escape(val)}"]`;
-              if (isSelectorUnique(sel)) return sel;
-            }
-          }
-
-          /*──────────────────────── 5) stable classes ─────────────*/
-          if (element.className && typeof element.className === "string") {
-            const classes = element.className.split(/\s+/).filter(Boolean);
-            const stable = classes.filter((c) => !isLikelyDynamicClass(c));
-
-            if (stable.length) {
-              const core = stable.slice(0, 3); // keep ≤ 3
-              const tag = element.tagName.toLowerCase();
-
-              const allSel = `${tag}.${core.map(CSS.escape).join(".")}`;
-              if (isSelectorUnique(allSel)) return allSel;
-
-              for (const cls of core) {
-                const single = `${tag}.${CSS.escape(cls)}`;
-                if (isSelectorUnique(single)) return single;
+              if (pathSegments.length > 0) {
+                const relativeSelector = `${ancestorSelector} ${pathSegments.join(" > ")}`;
+                if (isSelectorUnique(relativeSelector, element)) {
+                  return relativeSelector;
+                }
               }
             }
           }
 
-          /*──────────────────────── 6) text-based xpath ───────────*/
-          const text = element.textContent?.trim();
-          if (text && text.length && text.length < 50) {
-            const tag = element.tagName.toLowerCase();
-            if (/^(button|a|h[1-6]|label|li|span|p|div)$/i.test(tag)) {
-              const exact = `//${tag}[text()="${text.replace(/"/g, '\\"')}"]`;
-              if (
-                document.evaluate(
-                  exact,
-                  document,
-                  null,
-                  XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
-                  null,
-                ).snapshotLength === 1
-              )
-                return exact;
+          // Strategy 3: CSS path with nth-of-type (improved fallback)
+          if (!isTimedOut()) {
+            try {
+              const pathSegments: string[] = [];
+              let current: Element | null = element;
 
-              const partial = `//${tag}[contains(text(),"${text.slice(0, 20).replace(/"/g, '\\"')}")]`;
-              if (
-                document.evaluate(
-                  partial,
-                  document,
-                  null,
-                  XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
-                  null,
-                ).snapshotLength === 1
-              )
-                return partial;
-            }
-          }
+              while (
+                current &&
+                current !== document.body &&
+                pathSegments.length < 10
+              ) {
+                if (current.parentElement) {
+                  const siblings = Array.from(
+                    current.parentElement.children,
+                  ).filter((el) => el.tagName === current.tagName);
 
-          /*──────────────────────── 7) css path best-effort ───────*/
-          try {
-            let cur: Element | null = element;
-            const path: string[] = [cur.tagName.toLowerCase()];
+                  if (siblings.length === 1) {
+                    pathSegments.unshift(current.tagName.toLowerCase());
+                  } else {
+                    const index = siblings.indexOf(current) + 1;
+                    pathSegments.unshift(
+                      `${current.tagName.toLowerCase()}:nth-of-type(${index})`,
+                    );
+                  }
 
-            while (cur !== document.body && cur.parentElement) {
-              const sel = path.join(" > ");
-              if (isSelectorUnique(sel)) return sel;
-
-              const sibs = Array.from(cur.parentElement.children);
-              if (sibs.length > 1) {
-                const idx = sibs.indexOf(cur) + 1;
-                path[0] = `${cur.tagName.toLowerCase()}:nth-child(${idx})`;
-                const nth = path.join(" > ");
-                if (isSelectorUnique(nth)) return nth;
+                  // Test if current path is unique
+                  const testSelector = pathSegments.join(" > ");
+                  if (isSelectorUnique(testSelector, element)) {
+                    return testSelector;
+                  }
+                }
+                current = current.parentElement;
               }
-              cur = cur.parentElement;
-              path.unshift(cur.tagName.toLowerCase());
+            } catch {
+              // Continue to final fallback
             }
-          } catch {
-            /* ignore */
           }
 
-          /*──────────────────────── 8) guaranteed full path ───────*/
-          try {
-            let cur: Element | null = element;
-            const segs: string[] = [];
-            while (cur && cur !== document.body && cur.parentElement) {
-              const idx =
-                Array.from(cur.parentElement.children).indexOf(cur) + 1;
-              segs.unshift(`${cur.tagName.toLowerCase()}:nth-child(${idx})`);
-              cur = cur.parentElement;
-            }
-            segs.unshift("body");
-            return stabiliseIdSelector(segs.join(" > "));
-          } catch {
-            return stabiliseIdSelector(element.tagName.toLowerCase());
+          // Strategy 4: Final fallback with nth-child (guaranteed path)
+          if (isTimedOut()) {
+            return null; // Bail out if we've hit the timeout
           }
+
+          try {
+            const pathSegments: string[] = [];
+            let current: Element | null = element;
+
+            while (
+              current &&
+              current !== document.body &&
+              pathSegments.length < 15
+            ) {
+              if (current.parentElement) {
+                const index =
+                  Array.from(current.parentElement.children).indexOf(current) +
+                  1;
+                pathSegments.unshift(
+                  `${current.tagName.toLowerCase()}:nth-child(${index})`,
+                );
+              }
+              current = current.parentElement;
+            }
+
+            if (pathSegments.length > 0) {
+              return `body > ${pathSegments.join(" > ")}`;
+            }
+          } catch {
+            // Final emergency fallback
+            return element.tagName.toLowerCase();
+          }
+
+          return null;
         },
         { x, y },
       );
@@ -1250,171 +1433,348 @@ export class StagehandAgentHandler {
   }
 
   /**
-   * Get selector for the currently active element
+   * Get selector for the currently active element using enhanced robust logic
    */
   private async getActiveElementSelector(): Promise<string | null> {
     try {
       return await this.stagehandPage.page.evaluate(() => {
-        const element = document.activeElement;
+        const element = document.activeElement as Element;
         if (!element || element === document.body) return "body";
 
-        // 1. Testing attributes (highest priority)
-        if (element.getAttribute("data-testid")) {
-          return `[data-testid="${element.getAttribute("data-testid")}"]`;
-        }
-        if (element.getAttribute("data-cy")) {
-          return `[data-cy="${element.getAttribute("data-cy")}"]`;
-        }
-        if (element.getAttribute("data-test")) {
-          return `[data-test="${element.getAttribute("data-test")}"]`;
-        }
-        if (element.getAttribute("data-automation-id")) {
-          return `[data-automation-id="${element.getAttribute("data-automation-id")}"]`;
-        }
+        // Performance timeout to prevent infinite loops
+        const startTime = Date.now();
+        const TIMEOUT_MS = 30; // Shorter timeout for active element
+        const isTimedOut = () => Date.now() - startTime > TIMEOUT_MS;
 
-        // 2. ID attribute
-        if (element.id) {
-          return `#${element.id}`;
-        }
-
-        // 3. Extended ARIA and semantic attributes
-        const semanticAttributes = [
-          "aria-label",
-          "aria-describedby",
-          "aria-controls",
-          "aria-labelledby",
-          "aria-haspopup",
-          "aria-selected",
-          "aria-expanded",
-          "aria-checked",
-          "title",
-          "placeholder",
-          "for",
-          "alt",
-          "name", // Include name for form elements
-        ];
-
-        for (const attr of semanticAttributes) {
-          const value = element.getAttribute(attr);
-          if (value) {
-            // Special handling for name attribute on form elements
-            if (
-              attr === "name" &&
-              ["input", "select", "textarea", "button"].includes(
-                element.tagName.toLowerCase(),
-              )
-            ) {
-              return `${element.tagName.toLowerCase()}[name="${value}"]`;
-            }
-
-            // Use attribute with tag for better specificity
-            return `${element.tagName.toLowerCase()}[${attr}="${value}"]`;
-          }
-        }
-
-        // 4. Role attribute (only if specific enough)
-        const role = element.getAttribute("role");
-        if (
-          role &&
-          !["button", "link", "presentation", "none"].includes(role)
-        ) {
-          return `[role="${role}"]`;
-        }
-
-        // 5. Identify stable classes from UI frameworks
-        if (
-          element.className &&
-          typeof element.className === "string" &&
-          element.className.trim()
-        ) {
-          const classNames = element.className.trim().split(/\s+/);
-
-          // Filter out common dynamic class patterns
-          const isDynamicClass = (className: string): boolean => {
-            // CSS modules patterns (css-[hash])
-            if (/^css-[a-z0-9]+$/.test(className)) return true;
-
-            // Styled-components and emotion patterns
-            if (/^(sc|e)-[a-z0-9]+$/.test(className)) return true;
-
-            // Tailwind's JIT dynamic classes
-            if (/^[a-z]+:.*$/.test(className) && className.includes(":"))
-              return true;
-
-            // Angular dynamic classes
-            if (/^_ng(content|host)-[a-z0-9-]+$/.test(className)) return true;
-
-            // Vue.js dynamic classes
-            if (/^v-[a-z0-9]+$/.test(className)) return true;
-
-            // Hash-like suffixes often used in various frameworks
-            if (/^.+--[a-zA-Z0-9]+$/.test(className)) return true;
-
-            // Numeric/hash suffixes
-            if (/^.+[_-][0-9a-f]{4,}$/.test(className)) return true;
-
+        /*──────────────────────── Enhanced helpers ────────────────────────*/
+        const isSelectorUnique = (sel: string, targetElement: Element) => {
+          if (isTimedOut()) return false;
+          try {
+            const els = document.querySelectorAll(sel);
+            return els.length === 1 && els[0] === targetElement;
+          } catch {
             return false;
-          };
+          }
+        };
 
-          // Look for framework-specific stable class names first
-          const frameworkPatterns: Record<string, RegExp> = {
-            mui: /^Mui[A-Z][a-zA-Z]+-[a-z]+$/, // Material UI: MuiButton-root
-            ant: /^ant-[a-z]+-?[a-z]*$/, // Ant Design: ant-btn, ant-modal-content
-            chakra: /^chakra-[a-z]+-?[a-z]*$/, // Chakra UI: chakra-button
-            bootstrap:
-              /^(btn|form|nav|card|modal|container|row|col)(-[a-z]+)*$/, // Bootstrap
-            "react-bootstrap": /^(rb-|react-bootstrap-)/, // React Bootstrap
-            "tailwind-component": /^(tw-|tailwind-)/, // Tailwind CSS with prefixes
-          };
+        // Custom CSS escape function that handles numeric starts properly
+        const cssEscape = (str: string): string => {
+          if (!str) return str;
 
-          // Check for framework-specific classes
-          for (const [, pattern] of Object.entries(frameworkPatterns)) {
-            const frameworkClasses = classNames.filter((className) =>
-              pattern.test(className),
-            );
-            if (frameworkClasses.length > 0) {
-              // Use attribute selector with tag and framework class for better specificity
-              return `${element.tagName.toLowerCase()}[class*="${frameworkClasses[0]}"]`;
+          // Use CSS.escape but fix the numeric start issue
+          let escaped = CSS.escape(str);
+
+          // Fix the space issue after hex escape sequences for numeric starts
+          // CSS.escape turns "1-email" into "\31 -email" but we want "\31-email"
+          escaped = escaped.replace(/\\([0-9a-f]+)\s+(-)/gi, "\\$1$2");
+
+          return escaped;
+        };
+
+        // Enhanced dynamic ID detection
+        const isLikelyDynamicId = (id: string) =>
+          id.includes(":") ||
+          /^radix-/.test(id) ||
+          /^[A-Za-z]+-[0-9a-f]{6,}$/.test(id) ||
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+            id,
+          ) ||
+          /^[A-Za-z0-9]{12,}$/.test(id) ||
+          /^(react|vue|ng)-[A-Za-z0-9]+/.test(id);
+
+        // Enhanced dynamic class detection
+        const isLikelyDynamicClass = (cls: string) =>
+          cls.includes(":") ||
+          (cls.length > 15 && /^[a-z0-9]+$/.test(cls)) ||
+          /\d{2,}/.test(cls) ||
+          /^css-[a-f0-9]{6,}$/i.test(cls) ||
+          /^[a-z]+-[A-Za-z0-9]{6,}$/.test(cls) ||
+          /^(ng|vue|jsx|astro|styled)-/.test(cls) ||
+          (cls.startsWith("_") && cls.length > 8);
+
+        const getAccessibleName = (element: Element): string | null => {
+          const ariaLabel = element.getAttribute("aria-label");
+          if (ariaLabel) return ariaLabel;
+
+          const textContent = element.textContent?.trim();
+          if (textContent && textContent.length < 50) return textContent;
+
+          return null;
+        };
+
+        const getElementRole = (element: Element): string => {
+          return element.getAttribute("role") || element.tagName.toLowerCase();
+        };
+
+        // Find the nearest stable ancestor
+        const findStableAncestor = (element: Element): Element | null => {
+          let current: Element | null = element.parentElement;
+
+          while (current && current !== document.body && !isTimedOut()) {
+            const testAttrs = [
+              "data-testid",
+              "data-test",
+              "data-cy",
+              "data-automation-id",
+              "data-qa",
+              "data-test-id",
+            ];
+
+            for (const attr of testAttrs) {
+              if (current.hasAttribute(attr)) return current;
+            }
+
+            if (current.id && !isLikelyDynamicId(current.id)) {
+              return current;
+            }
+
+            const role = current.getAttribute("role");
+            const accessibleName = getAccessibleName(current);
+            if (role && accessibleName) {
+              return current;
+            }
+
+            const semanticTags = [
+              "main",
+              "nav",
+              "header",
+              "footer",
+              "section",
+              "article",
+              "aside",
+              "form",
+            ];
+            if (semanticTags.includes(current.tagName.toLowerCase())) {
+              return current;
+            }
+
+            current = current.parentElement;
+          }
+
+          return null;
+        };
+
+        // Build enhanced selector for the active element
+        const buildActiveElementSelector = (
+          element: Element,
+          options: { forbidAncestor?: boolean } = {},
+        ): string | null => {
+          if (isTimedOut()) return null;
+
+          /*──────────────────────── 1) Test attributes (highest priority) ─────────────────*/
+          const testAttrs = [
+            "data-testid",
+            "data-test",
+            "data-cy",
+            "data-automation-id",
+            "data-qa",
+            "data-test-id",
+          ];
+
+          for (const attr of testAttrs) {
+            const val = element.getAttribute(attr);
+            if (val) {
+              const sel = `[${attr}="${cssEscape(val)}"]`;
+              if (isSelectorUnique(sel, element)) return sel;
             }
           }
 
-          // Filter out dynamic classes and keep stable ones
-          const stableClasses = classNames.filter(
-            (className) => !isDynamicClass(className),
-          );
+          /*──────────────────────── 2) Stable ID ─────────────────*/
+          if (element.id && !isLikelyDynamicId(element.id)) {
+            const idSel = `#${cssEscape(element.id)}`;
+            if (isSelectorUnique(idSel, element)) return idSel;
+          }
 
-          if (stableClasses.length > 0) {
-            return `${element.tagName.toLowerCase()}.${stableClasses.join(".")}`;
+          /*──────────────────────── 3) Role + Accessible Name ─────────────────*/
+          const role = getElementRole(element);
+          const accessibleName = getAccessibleName(element);
+          if (accessibleName) {
+            const ariaLabel = element.getAttribute("aria-label");
+            if (ariaLabel) {
+              const sel = `[role="${role}"][aria-label="${cssEscape(ariaLabel)}"]`;
+              if (isSelectorUnique(sel, element)) return sel;
+            }
+
+            // For form elements, prefer accessible name patterns
+            if (["input", "select", "textarea", "button"].includes(role)) {
+              const sel = `${role}[aria-label="${cssEscape(accessibleName)}"]`;
+              if (isSelectorUnique(sel, element)) return sel;
+            }
+          }
+
+          /*──────────────────────── 4) Form attributes (critical for active elements) ─────────────────*/
+          const formAttrs = ["name", "placeholder", "for", "type", "value"];
+          for (const attr of formAttrs) {
+            const val = element.getAttribute(attr);
+            if (val && (attr !== "value" || val.length < 20)) {
+              // Avoid long values
+              const sel = `${element.tagName.toLowerCase()}[${attr}="${cssEscape(val)}"]`;
+              if (isSelectorUnique(sel, element)) return sel;
+            }
+          }
+
+          /*──────────────────────── 5) ARIA attributes ─────────────────*/
+          const ariaAttrs = [
+            "aria-label",
+            "aria-labelledby",
+            "aria-describedby",
+            "aria-controls",
+            "aria-expanded",
+            "aria-selected",
+            "aria-required",
+          ];
+
+          for (const attr of ariaAttrs) {
+            const val = element.getAttribute(attr);
+            if (val && !isLikelyDynamicId(val)) {
+              const sel = `${element.tagName.toLowerCase()}[${attr}="${cssEscape(val)}"]`;
+              if (isSelectorUnique(sel, element)) return sel;
+            }
+          }
+
+          /*──────────────────────── 6) Stable classes ─────────────────*/
+          if (element.className && typeof element.className === "string") {
+            const classes = element.className.split(/\s+/).filter(Boolean);
+            const stableClasses = classes.filter(
+              (cls) => !isLikelyDynamicClass(cls),
+            );
+
+            if (stableClasses.length > 0) {
+              const tag = element.tagName.toLowerCase();
+
+              // Try combination of up to 2 stable classes
+              for (let i = 0; i < Math.min(stableClasses.length, 2); i++) {
+                const classSelector = stableClasses.slice(0, i + 1);
+                const sel = `${tag}.${classSelector.map(cssEscape).join(".")}`;
+                if (isSelectorUnique(sel, element)) return sel;
+              }
+            }
+          }
+
+          /*──────────────────────── 7) Positional with nth-of-type ─────────────────*/
+          if (element.parentElement && !options.forbidAncestor) {
+            const siblings = Array.from(element.parentElement.children).filter(
+              (el) => el.tagName === element.tagName,
+            );
+
+            if (siblings.length > 1) {
+              const index = siblings.indexOf(element) + 1;
+              const sel = `${element.tagName.toLowerCase()}:nth-of-type(${index})`;
+              if (isSelectorUnique(sel, element)) return sel;
+            }
+          }
+
+          return null;
+        };
+
+        /*──────────────────────── Main algorithm ────────────────────────*/
+
+        // Strategy 1: Try to build a direct selector for the active element
+        const directSelector = buildActiveElementSelector(element);
+        if (directSelector) return directSelector;
+
+        // Strategy 2: Ancestor-first approach
+        const stableAncestor = findStableAncestor(element);
+        if (stableAncestor && !isTimedOut()) {
+          const ancestorSelector = buildActiveElementSelector(stableAncestor);
+          if (ancestorSelector) {
+            // Build a relative selector from ancestor to target
+            const leafSelector = buildActiveElementSelector(element, {
+              forbidAncestor: true,
+            });
+            if (leafSelector) {
+              const combinedSelector = `${ancestorSelector} ${leafSelector}`;
+              if (isSelectorUnique(combinedSelector, element)) {
+                return combinedSelector;
+              }
+            }
+
+            // Fallback: use positional selector from ancestor
+            let current = element;
+            const pathSegments: string[] = [];
+
+            while (current && current !== stableAncestor && !isTimedOut()) {
+              if (current.parentElement) {
+                const siblings = Array.from(
+                  current.parentElement.children,
+                ).filter((el) => el.tagName === current.tagName);
+                const index = siblings.indexOf(current) + 1;
+                pathSegments.unshift(
+                  `${current.tagName.toLowerCase()}:nth-of-type(${index})`,
+                );
+              }
+              current = current.parentElement;
+            }
+
+            if (pathSegments.length > 0) {
+              const relativeSelector = `${ancestorSelector} ${pathSegments.join(" > ")}`;
+              if (isSelectorUnique(relativeSelector, element)) {
+                return relativeSelector;
+              }
+            }
           }
         }
 
-        // 6. Text content for interactive elements (less useful for inputs but good for buttons)
+        // Strategy 3: Text content for interactive elements
         const textContent = element.textContent?.trim();
-        const interactiveElements = [
-          "button",
-          "a",
-          "h1",
-          "h2",
-          "h3",
-          "h4",
-          "h5",
-          "h6",
-        ];
-
-        if (
-          textContent &&
-          textContent.length < 50 &&
-          interactiveElements.includes(element.tagName.toLowerCase())
-        ) {
-          if (textContent.length < 20) {
-            return `//${element.tagName.toLowerCase()}[text()="${textContent}"]`;
-          } else {
-            return `//${element.tagName.toLowerCase()}[contains(text(), "${textContent.substring(0, 20)}")]`;
+        if (textContent && textContent.length > 0 && textContent.length < 50) {
+          const tag = element.tagName.toLowerCase();
+          if (["button", "a", "label", "span"].includes(tag)) {
+            try {
+              const xpath = `//${tag}[contains(text(), "${textContent.slice(0, 20).replace(/"/g, '\\"')}")]`;
+              const result = document.evaluate(
+                xpath,
+                document,
+                null,
+                XPathResult.FIRST_ORDERED_NODE_TYPE,
+                null,
+              );
+              if (result.singleNodeValue === element) return xpath;
+            } catch {
+              // Continue to next strategy
+            }
           }
         }
 
-        // 7. Last resort: tag name
-        return `${element.tagName.toLowerCase()}`;
+        // Strategy 4: CSS path with nth-of-type (fallback)
+        if (!isTimedOut()) {
+          try {
+            const pathSegments: string[] = [];
+            let current: Element | null = element;
+
+            while (
+              current &&
+              current !== document.body &&
+              pathSegments.length < 8
+            ) {
+              if (current.parentElement) {
+                const siblings = Array.from(
+                  current.parentElement.children,
+                ).filter((el) => el.tagName === current.tagName);
+
+                if (siblings.length === 1) {
+                  pathSegments.unshift(current.tagName.toLowerCase());
+                } else {
+                  const index = siblings.indexOf(current) + 1;
+                  pathSegments.unshift(
+                    `${current.tagName.toLowerCase()}:nth-of-type(${index})`,
+                  );
+                }
+
+                const testSelector = pathSegments.join(" > ");
+                if (isSelectorUnique(testSelector, element)) {
+                  return testSelector;
+                }
+              }
+              current = current.parentElement;
+            }
+          } catch {
+            // Continue to final fallback
+          }
+        }
+
+        // Final fallback: just the tag name
+        return element.tagName.toLowerCase();
       });
     } catch (error) {
       this.logger({
