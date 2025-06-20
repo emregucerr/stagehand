@@ -12,7 +12,7 @@ import {
 const modelToAgentProviderMap: Record<string, AgentType> = {
   "computer-use-preview": "openai",
   "claude-3-5-sonnet-20240620": "anthropic",
-  "claude-3-7-sonnet-20250219": "anthropic", // Add newer Claude models
+  "claude-sonnet-4-20250514": "anthropic", // Add newer Claude models
 };
 
 /**

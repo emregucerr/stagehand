@@ -120,7 +120,7 @@ await stagehand.page.goto("https://www.google.com");
 const agent = stagehand.agent({
   // You can use either OpenAI or Anthropic
   provider: "openai",
-  // The model to use (claude-3-7-sonnet-20250219 or claude-3-5-sonnet-20240620 for Anthropic)
+  // The model to use (claude-sonnet-4-20250514 or claude-3-5-sonnet-20240620 for Anthropic)
   model: "computer-use-preview",
 
   // Customize the system prompt
