@@ -89,6 +89,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.39.0",
+    "@azure/identity": "^4.5.0",
     "@browserbasehq/sdk": "^2.4.0",
     "@google/genai": "^0.8.0",
     "openai": "^4.87.1",

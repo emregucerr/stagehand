@@ -1,4 +1,8 @@
-import OpenAI from "openai";
+import OpenAI, { AzureOpenAI } from "openai";
+import {
+  getBearerTokenProvider,
+  DefaultAzureCredential,
+} from "@azure/identity";
 import { LogLine } from "../../types/log";
 import {
   AgentAction,
@@ -20,7 +24,7 @@ export class OpenAICUAClient extends AgentClient {
   private apiKey: string;
   private organization?: string;
   private baseURL: string;
-  private client: OpenAI;
+  private client: OpenAI | AzureOpenAI;
   public lastResponseId?: string;
   private currentViewport = { width: 1024, height: 768 };
   private currentUrl?: string;
@@ -58,28 +62,80 @@ export class OpenAICUAClient extends AgentClient {
 
     // Build client options dynamically to support Azure OpenAI as the primary provider when configured via environment variables
     // Support both AZURE_OPENAI_* and AZURE_API_* naming conventions
-    const azureEndpoint = process.env.AZURE_OPENAI_ENDPOINT || process.env.AZURE_API_BASE;
-    const azureApiKey = process.env.AZURE_OPENAI_API_KEY || process.env.AZURE_API_KEY || this.apiKey;
-    const azureApiVersion = process.env.AZURE_OPENAI_API_VERSION || process.env.AZURE_API_VERSION || "2024-02-15-preview";
+    const azureEndpoint =
+      process.env.AZURE_OPENAI_ENDPOINT || process.env.AZURE_API_BASE;
+    const azureApiKey =
+      process.env.AZURE_OPENAI_API_KEY ||
+      process.env.AZURE_API_KEY ||
+      this.apiKey;
+    const azureApiVersion =
+      process.env.AZURE_OPENAI_API_VERSION ||
+      process.env.AZURE_API_VERSION ||
+      "2025-04-01-preview";
 
-    if (azureEndpoint && azureApiKey) {
-      this.baseURL = `${azureEndpoint}/openai/deployments/${modelName}`;
-      this.clientOptions = {
-        apiKey: azureApiKey,
-        baseURL: this.baseURL,
-        defaultHeaders: { "api-key": azureApiKey },
-        defaultQuery: { "api-version": azureApiVersion },
-      };
+    if (azureEndpoint) {
+      // Prefer API key authentication when available, as it's more reliable in local development
+      if (azureApiKey) {
+        const cleanEndpoint = azureEndpoint.replace(/\/$/, "");
+        this.baseURL = cleanEndpoint;
+
+        this.client = new AzureOpenAI({
+          apiKey: azureApiKey,
+          apiVersion: azureApiVersion,
+          endpoint: cleanEndpoint,
+          deployment: modelName,
+        });
+
+        this.clientOptions = {
+          apiKey: azureApiKey,
+          apiVersion: azureApiVersion,
+          endpoint: cleanEndpoint,
+          deployment: modelName,
+        };
+      } else {
+        // Only try Azure AD authentication if no API key is available
+        try {
+          const credential = new DefaultAzureCredential();
+          const scope = "https://cognitiveservices.azure.com/.default";
+          const azureADTokenProvider = getBearerTokenProvider(
+            credential,
+            scope,
+          );
+
+          // Remove trailing slash from endpoint if present to avoid double slashes
+          const cleanEndpoint = azureEndpoint.replace(/\/$/, "");
+          this.baseURL = cleanEndpoint;
+
+          this.client = new AzureOpenAI({
+            azureADTokenProvider,
+            apiVersion: azureApiVersion,
+            endpoint: cleanEndpoint,
+            deployment: modelName,
+          });
+
+          this.clientOptions = {
+            azureADTokenProvider,
+            apiVersion: azureApiVersion,
+            endpoint: cleanEndpoint,
+            deployment: modelName,
+          };
+        } catch {
+          // Fallback to public OpenAI service if Azure AD fails
+          this.baseURL = "https://api.openai.com/v1";
+          this.clientOptions = {
+            apiKey: this.apiKey,
+          };
+          this.client = new OpenAI(this.clientOptions);
+        }
+      }
     } else {
       // Fallback to public OpenAI service
       this.baseURL = "https://api.openai.com/v1";
       this.clientOptions = {
         apiKey: this.apiKey,
       };
+      this.client = new OpenAI(this.clientOptions);
     }
-
-    // Initialize the OpenAI client with the computed options
-    this.client = new OpenAI(this.clientOptions);
   }
 
   setViewport(width: number, height: number): void {
