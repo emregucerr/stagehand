@@ -46,8 +46,37 @@ export class OpenAIClient extends LLMClient {
     clientOptions?: ClientOptions;
   }) {
     super(modelName);
-    this.clientOptions = clientOptions;
-    this.client = new OpenAI(clientOptions);
+
+    // Dynamically build client options so that Azure OpenAI can be used
+    // transparently when its environment variables are available.
+    // Support both AZURE_OPENAI_* and AZURE_API_* naming conventions
+    let resolvedClientOptions: ClientOptions = clientOptions ?? {};
+
+    const azureEndpoint = process.env.AZURE_OPENAI_ENDPOINT || process.env.AZURE_API_BASE;
+    const azureApiKey = process.env.AZURE_OPENAI_API_KEY || process.env.AZURE_API_KEY;
+    const azureApiVersion = process.env.AZURE_OPENAI_API_VERSION || process.env.AZURE_API_VERSION || "2024-02-15-preview";
+
+    if (azureEndpoint && azureApiKey) {
+      resolvedClientOptions = {
+        ...resolvedClientOptions,
+        apiKey: azureApiKey,
+        baseURL: `${azureEndpoint}/openai/deployments/${modelName}`,
+        defaultHeaders: {
+          "api-key": azureApiKey,
+        },
+        defaultQuery: {
+          "api-version": azureApiVersion,
+        },
+      };
+    }
+
+    // If no Azure variables are set, fall back to the standard OpenAI key
+    if (!resolvedClientOptions.apiKey && process.env.OPENAI_API_KEY) {
+      resolvedClientOptions.apiKey = process.env.OPENAI_API_KEY;
+    }
+
+    this.clientOptions = resolvedClientOptions;
+    this.client = new OpenAI(this.clientOptions);
     this.cache = cache;
     this.enableCaching = enableCaching;
     this.modelName = modelName;

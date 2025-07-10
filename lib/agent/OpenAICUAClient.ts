@@ -56,7 +56,29 @@ export class OpenAICUAClient extends AgentClient {
       apiKey: this.apiKey,
     };
 
-    // Initialize the OpenAI client
+    // Build client options dynamically to support Azure OpenAI as the primary provider when configured via environment variables
+    // Support both AZURE_OPENAI_* and AZURE_API_* naming conventions
+    const azureEndpoint = process.env.AZURE_OPENAI_ENDPOINT || process.env.AZURE_API_BASE;
+    const azureApiKey = process.env.AZURE_OPENAI_API_KEY || process.env.AZURE_API_KEY || this.apiKey;
+    const azureApiVersion = process.env.AZURE_OPENAI_API_VERSION || process.env.AZURE_API_VERSION || "2024-02-15-preview";
+
+    if (azureEndpoint && azureApiKey) {
+      this.baseURL = `${azureEndpoint}/openai/deployments/${modelName}`;
+      this.clientOptions = {
+        apiKey: azureApiKey,
+        baseURL: this.baseURL,
+        defaultHeaders: { "api-key": azureApiKey },
+        defaultQuery: { "api-version": azureApiVersion },
+      };
+    } else {
+      // Fallback to public OpenAI service
+      this.baseURL = "https://api.openai.com/v1";
+      this.clientOptions = {
+        apiKey: this.apiKey,
+      };
+    }
+
+    // Initialize the OpenAI client with the computed options
     this.client = new OpenAI(this.clientOptions);
   }
 
