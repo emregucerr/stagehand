@@ -68,6 +68,14 @@ export class OpenAIClient extends LLMClient {
     if (azureEndpoint) {
       // Prefer API key authentication when available, as it's more reliable in local development
       if (azureApiKey) {
+
+          // Forcefully remove OPENAI_BASE_URL environment variable to prevent conflict
+          // with Azure OpenAI endpoint parameter (baseURL and endpoint are mutually exclusive)
+          if (process.env.OPENAI_BASE_URL) {
+            console.log('Removing OPENAI_BASE_URL environment variable to prevent conflict with Azure OpenAI endpoint');
+            delete process.env.OPENAI_BASE_URL;
+            }
+
         this.client = new AzureOpenAI({
           apiKey: azureApiKey,
           apiVersion: azureApiVersion,
@@ -90,6 +98,13 @@ export class OpenAIClient extends LLMClient {
             credential,
             scope,
           );
+
+          // Forcefully remove OPENAI_BASE_URL environment variable to prevent conflict
+          // with Azure OpenAI endpoint parameter (baseURL and endpoint are mutually exclusive)
+          if (process.env.OPENAI_BASE_URL) {
+            console.log('Removing OPENAI_BASE_URL environment variable to prevent conflict with Azure OpenAI endpoint');
+            delete process.env.OPENAI_BASE_URL;
+            }
 
           this.client = new AzureOpenAI({
             azureADTokenProvider,

@@ -79,6 +79,13 @@ export class OpenAICUAClient extends AgentClient {
         const cleanEndpoint = azureEndpoint.replace(/\/$/, "");
         this.baseURL = cleanEndpoint;
 
+      // Forcefully remove OPENAI_BASE_URL environment variable to prevent conflict
+      // with Azure OpenAI endpoint parameter (baseURL and endpoint are mutually exclusive)
+      if (process.env.OPENAI_BASE_URL) {
+        console.log('Removing OPENAI_BASE_URL environment variable to prevent conflict with Azure OpenAI endpoint');
+        delete process.env.OPENAI_BASE_URL;
+        }
+
         this.client = new AzureOpenAI({
           apiKey: azureApiKey,
           apiVersion: azureApiVersion,
@@ -105,6 +112,13 @@ export class OpenAICUAClient extends AgentClient {
           // Remove trailing slash from endpoint if present to avoid double slashes
           const cleanEndpoint = azureEndpoint.replace(/\/$/, "");
           this.baseURL = cleanEndpoint;
+
+          // Forcefully remove OPENAI_BASE_URL environment variable to prevent conflict
+          // with Azure OpenAI endpoint parameter (baseURL and endpoint are mutually exclusive)
+          if (process.env.OPENAI_BASE_URL) {
+            console.log('Removing OPENAI_BASE_URL environment variable to prevent conflict with Azure OpenAI endpoint');
+            delete process.env.OPENAI_BASE_URL;
+            }
 
           this.client = new AzureOpenAI({
             azureADTokenProvider,
