@@ -1,4 +1,4 @@
-import OpenAI, { ClientOptions } from "openai";
+import OpenAI, { ClientOptions, AzureOpenAI } from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
 import {
   ChatCompletionAssistantMessageParam,
@@ -9,6 +9,10 @@ import {
   ChatCompletionSystemMessageParam,
   ChatCompletionUserMessageParam,
 } from "openai/resources/chat";
+import {
+  getBearerTokenProvider,
+  DefaultAzureCredential,
+} from "@azure/identity";
 import zodToJsonSchema from "zod-to-json-schema";
 import { LogLine } from "../../types/log";
 import { AvailableModel } from "../../types/model";
@@ -28,10 +32,10 @@ import {
 
 export class OpenAIClient extends LLMClient {
   public type = "openai" as const;
-  private client: OpenAI;
+  private client: OpenAI | AzureOpenAI;
   private cache: LLMCache | undefined;
   private enableCaching: boolean;
-  public clientOptions: ClientOptions;
+  public clientOptions: ClientOptions | Record<string, unknown>;
 
   constructor({
     enableCaching = false,
@@ -46,8 +50,94 @@ export class OpenAIClient extends LLMClient {
     clientOptions?: ClientOptions;
   }) {
     super(modelName);
-    this.clientOptions = clientOptions;
-    this.client = new OpenAI(clientOptions);
+
+    // Dynamically build client options so that Azure OpenAI can be used
+    // transparently when its environment variables are available.
+    // Support both AZURE_OPENAI_* and AZURE_API_* naming conventions
+    const resolvedClientOptions: ClientOptions = clientOptions ?? {};
+
+    const azureEndpoint =
+      process.env.AZURE_OPENAI_ENDPOINT || process.env.AZURE_API_BASE;
+    const azureApiKey =
+      process.env.AZURE_OPENAI_API_KEY || process.env.AZURE_API_KEY;
+    const azureApiVersion =
+      process.env.AZURE_OPENAI_API_VERSION ||
+      process.env.AZURE_API_VERSION ||
+      "2025-04-01-preview";
+
+    if (azureEndpoint) {
+      // Prefer API key authentication when available, as it's more reliable in local development
+      if (azureApiKey) {
+        // Forcefully remove OPENAI_BASE_URL environment variable to prevent conflict
+        // with Azure OpenAI endpoint parameter (baseURL and endpoint are mutually exclusive)
+        if (process.env.OPENAI_BASE_URL) {
+          console.log(
+            "Removing OPENAI_BASE_URL environment variable to prevent conflict with Azure OpenAI endpoint",
+          );
+          delete process.env.OPENAI_BASE_URL;
+        }
+
+        this.client = new AzureOpenAI({
+          apiKey: azureApiKey,
+          apiVersion: azureApiVersion,
+          endpoint: azureEndpoint,
+          deployment: modelName,
+        });
+
+        this.clientOptions = {
+          apiKey: azureApiKey,
+          apiVersion: azureApiVersion,
+          endpoint: azureEndpoint,
+          deployment: modelName,
+        };
+      } else {
+        // Only try Azure AD authentication if no API key is available
+        try {
+          const credential = new DefaultAzureCredential();
+          const scope = "https://cognitiveservices.azure.com/.default";
+          const azureADTokenProvider = getBearerTokenProvider(
+            credential,
+            scope,
+          );
+
+          // Forcefully remove OPENAI_BASE_URL environment variable to prevent conflict
+          // with Azure OpenAI endpoint parameter (baseURL and endpoint are mutually exclusive)
+          if (process.env.OPENAI_BASE_URL) {
+            console.log(
+              "Removing OPENAI_BASE_URL environment variable to prevent conflict with Azure OpenAI endpoint",
+            );
+            delete process.env.OPENAI_BASE_URL;
+          }
+
+          this.client = new AzureOpenAI({
+            azureADTokenProvider,
+            apiVersion: azureApiVersion,
+            endpoint: azureEndpoint,
+            deployment: modelName,
+          });
+
+          this.clientOptions = {
+            azureADTokenProvider,
+            apiVersion: azureApiVersion,
+            endpoint: azureEndpoint,
+            deployment: modelName,
+          };
+        } catch (error) {
+          throw new StagehandError(
+            `Azure OpenAI endpoint is configured but authentication failed. Either set AZURE_API_KEY or configure Azure AD authentication (az login). Error: ${error.message}`,
+          );
+        }
+      }
+    } else {
+      // Use standard OpenAI client
+      if (process.env.OPENAI_API_KEY) {
+        resolvedClientOptions.apiKey = process.env.OPENAI_API_KEY;
+      }
+
+      this.clientOptions = resolvedClientOptions;
+      this.client = new OpenAI(this.clientOptions);
+    }
+
     this.cache = cache;
     this.enableCaching = enableCaching;
     this.modelName = modelName;
